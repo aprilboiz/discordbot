@@ -72,7 +72,7 @@ jobs:
         docker rm -f discord-bot || echo "No existing container to remove."
 
         echo "Running the container..."
-        docker run -it -v /home/discordbot-logs:/app/logs \
+        docker run --restart always -it -v /home/discordbot-logs:/app/logs \
           -e TOKEN=${{ env.TOKEN }} \
           -e SPOTIPY_CLIENT_ID=${{ env.SPOTIPY_CLIENT_ID }} \
           -e SPOTIPY_CLIENT_SECRET=${{ env.SPOTIPY_CLIENT_SECRET }} \
