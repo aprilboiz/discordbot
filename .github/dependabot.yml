@@ -13,8 +13,3 @@ updates:
       uv-dependencies:
         patterns:
           - "*"
-
-    labels:
-      - "dependencies"
-      - "dependabot"
-      - "automated"
