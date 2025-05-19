@@ -37,5 +37,5 @@ COPY --from=builder --chown=app:app /app /app
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Run the FastAPI application by default
-CMD ["uv", "run", "main.py"]
+# Run the application
+CMD ["/python/bin/python", "main.py"]
