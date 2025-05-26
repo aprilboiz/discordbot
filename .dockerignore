@@ -23,6 +23,9 @@ Dockerfile*
 docker-compose*
 .dockerignore
 
+# Entrypoint script is needed, so don't ignore it
+# entrypoint.sh
+
 # Git files
 .git/
 .gitignore

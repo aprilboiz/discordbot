@@ -41,6 +41,7 @@ RUN apk add --no-cache \
     nodejs \
     ffmpeg \
     tzdata \
+    su-exec \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && rm -rf /tmp/* /var/cache/apk/* /usr/share/man /usr/share/doc /var/lib/apk/* \
@@ -68,6 +69,10 @@ COPY --chown=appuser:appgroup mapper/ ./mapper/
 COPY --chown=appuser:appgroup patterns/ ./patterns/
 COPY --chown=appuser:appgroup utils/ ./utils/
 
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Create required directories with proper permissions and ownership
 RUN mkdir -p logs temp_folder && \
     chown -R appuser:appgroup /app && \
@@ -75,11 +80,10 @@ RUN mkdir -p logs temp_folder && \
     find /app -type f -name "*.py" -exec chmod 644 {} + && \
     find /app -type d -exec chmod 755 {} +
 
-# Switch to non-root user
-USER appuser
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
+# Use entrypoint script to handle permissions dynamically
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "main.py"]
