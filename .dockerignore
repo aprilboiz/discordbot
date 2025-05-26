@@ -18,6 +18,35 @@ logs/
 table.py
 *.db
 
+# Docker files
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Git files
+.git/
+.gitignore
+
+# Documentation
+README.md
+docs/
+
+# IDE and editor files
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Cache and temp files
+*.cache
+.pytest_cache/
+.mypy_cache/
+*.tmp
+*.temp
+temp/
+
 # C extensions
 *.so
 
