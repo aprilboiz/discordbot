@@ -2,12 +2,13 @@ import asyncio
 import logging
 from typing import List, Union
 
-import requests
+import aiohttp
 from soundcloud import AlbumPlaylist, BasicTrack, SoundCloud, Track
 
 from core.exceptions import ResolveException
 from patterns.singleton import SingletonMeta
 from utils import to_thread
+from utils.network_utils import network_manager
 
 _log = logging.getLogger(__name__)
 
@@ -31,8 +32,7 @@ class SoundCloudService(metaclass=SingletonMeta):
     def get_thumbnail(self, track: Union[Track, BasicTrack]) -> str:
         return track.artwork_url or track.user.avatar_url
 
-    @to_thread
-    def get_playback_url(self, track: Union[Track, BasicTrack]):
+    async def get_playback_url(self, track: Union[Track, BasicTrack]):
         # Transcoding involves 3 types of protocols: HLS, progressive and Opus.
         # We prefer to use the 'HLS' protocol because it's the best for streaming.
         stream_url = track.media.transcodings[0].url
@@ -41,12 +41,20 @@ class SoundCloudService(metaclass=SingletonMeta):
             "client_id": self.client_id,
             "track_authorization": track_authorization,
         }
-        response = requests.get(
-            stream_url, headers=self.sc._get_default_headers(), params=params
-        )
-        response.raise_for_status()
-        _log.debug(f"Got playback URL for: '{track.title}'")
-        return response.json()["url"]
+        
+        try:
+            response = await network_manager.request_with_retry(
+                "GET", 
+                stream_url, 
+                headers=self.sc._get_default_headers(), 
+                params=params
+            )
+            response_data = await response.json()
+            _log.debug(f"Got playback URL for: '{track.title}'")
+            return response_data["url"]
+        except Exception as e:
+            _log.error(f"Failed to get playback URL for '{track.title}': {e}")
+            raise
 
     @to_thread
     def __get_tracks(self, track_ids: list[int]) -> List[BasicTrack]:

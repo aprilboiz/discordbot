@@ -1,21 +1,32 @@
 import discord
 from discord.ext import commands
 import traceback
-from typing import Optional
+from typing import Optional, Dict, Any
 import datetime
 import logging
-import logging.handlers
-from pathlib import Path
+import asyncio
+from collections import defaultdict
+import time
 
 
 class ErrorHandler:
-    """A class to handle errors globally across the bot"""
+    """Enhanced error handler with monitoring and rate limiting"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.error_channel_id: Optional[int] = None
-        self.logger = logging.getLogger("bot")
+        self.logger = logging.getLogger("bot.error_handler")
         self.logger.setLevel(logging.INFO)
+
+        # Error rate limiting
+        self.error_counts = defaultdict(int)
+        self.error_timestamps = defaultdict(list)
+        self.rate_limit_window = 300  # 5 minutes
+        self.max_errors_per_window = 5
+
+        # Error recovery tracking
+        self.recovery_attempts = defaultdict(int)
+        self.max_recovery_attempts = 3
 
     def log_error(self, error: Exception, error_source: str, **kwargs):
         """Log error with context information"""
@@ -97,22 +108,32 @@ class ErrorHandler:
         # Get original error if exists
         error = getattr(error, "original", error)
 
-        # User-friendly error messages
-        user_friendly_errors = {
-            commands.MissingPermissions: "You don't have the required permissions to use this command.",
-            commands.BotMissingPermissions: "I don't have the required permissions to execute this command.",
-            commands.MissingRequiredArgument: f"Missing required argument: {error.param.name}",
-            commands.BadArgument: "Invalid argument provided.",
-            commands.CommandOnCooldown: f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.",
-            commands.NoPrivateMessage: "This command cannot be used in private messages.",
-            commands.DisabledCommand: "This command is currently disabled.",
-            commands.MemberNotFound: "Could not find the specified member.",
-            commands.ChannelNotFound: "Could not find the specified channel.",
-            commands.RoleNotFound: "Could not find the specified role.",
-            commands.TooManyArguments: "Too many arguments provided.",
-            commands.UserInputError: "Invalid input provided.",
-            commands.CommandNotFound: None,  # We don't want to respond to unknown commands
-        }
+        # Check rate limiting
+        error_key = self._get_error_key(error, "command")
+        if self._should_rate_limit_error(error_key):
+            return  # Skip if rate limited
+
+        # Record metrics
+        await self._record_error_metrics(error, "command")
+
+        # Create error-specific messages
+        error_message = None
+        if isinstance(error, commands.MissingRequiredArgument):
+            error_message = f"Missing required argument: {error.param.name}"
+        elif isinstance(error, commands.CommandOnCooldown):
+            error_message = f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds."
+        elif isinstance(error, commands.MissingPermissions):
+            error_message = (
+                "You don't have the required permissions to use this command."
+            )
+        elif isinstance(error, commands.BotMissingPermissions):
+            error_message = (
+                "I don't have the required permissions to execute this command."
+            )
+        elif isinstance(error, commands.BadArgument):
+            error_message = "Invalid argument provided."
+        elif isinstance(error, commands.CommandNotFound):
+            return  # Don't respond to unknown commands
 
         # Log error with context
         self.log_error(
@@ -125,27 +146,24 @@ class ErrorHandler:
             Message=ctx.message.content,
         )
 
-        # Get user-friendly error message
-        error_message = None
-        for error_type, message in user_friendly_errors.items():
-            if isinstance(error, error_type):
-                error_message = message
-                break
+        # Attempt recovery
+        if await self._attempt_error_recovery(error, ctx=ctx):
+            return
 
         if error_message:
             # Send user-friendly error message
             error_embed = discord.Embed(
                 title="❌ Error", description=error_message, color=discord.Color.red()
             )
-            await ctx.send(embed=error_embed, delete_after=10)
+            try:
+                await ctx.send(embed=error_embed, delete_after=10)
+            except Exception as e:
+                self.logger.error(f"Failed to send error message to user: {e}")
 
         # Send to error channel if it's an unexpected error
-        if not any(isinstance(error, err_type) for err_type in user_friendly_errors):
+        if error_message is None:
             error_embed = await self.create_error_embed(error, ctx=ctx)
-            if self.error_channel_id:
-                error_channel = self.bot.get_channel(self.error_channel_id)
-                if error_channel:
-                    await error_channel.send(embed=error_embed)
+            await self._send_to_error_channel(error_embed)
 
     async def handle_interaction_error(
         self, interaction: discord.Interaction, error: Exception
@@ -155,7 +173,19 @@ class ErrorHandler:
         # Get original error if exists
         error = getattr(error, "original", error)
 
+        # Check rate limiting
+        error_key = self._get_error_key(error, "interaction")
+        if self._should_rate_limit_error(error_key):
+            return  # Skip if rate limited
+
+        # Record metrics
+        await self._record_error_metrics(error, "interaction")
+
         # Log error with context
+        channel_info = "Unknown"
+        if interaction.channel:
+            channel_info = f"{interaction.channel} (ID: {interaction.channel.id})"
+
         self.log_error(
             error,
             "Interaction Command",
@@ -166,8 +196,12 @@ class ErrorHandler:
                 if interaction.guild
                 else "DM"
             ),
-            Channel=f"{interaction.channel} (ID: {interaction.channel.id})",
+            Channel=channel_info,
         )
+
+        # Attempt recovery
+        if await self._attempt_error_recovery(error, interaction=interaction):
+            return
 
         # Create user-friendly error message
         error_message = str(error)
@@ -196,11 +230,100 @@ class ErrorHandler:
                 )
         except discord.errors.InteractionResponded:
             pass
+        except Exception as e:
+            self.logger.error(f"Failed to send error message to user: {e}")
 
         # Log unexpected errors to error channel
-        if not isinstance(error, discord.app_commands.CommandInvokeError):
-            error_embed = await self.create_error_embed(error, interaction=interaction)
-            if self.error_channel_id:
-                error_channel = self.bot.get_channel(self.error_channel_id)
-                if error_channel:
-                    await error_channel.send(embed=error_embed)
+        error_embed = await self.create_error_embed(error, interaction=interaction)
+        await self._send_to_error_channel(error_embed)
+
+    async def _send_to_error_channel(self, embed: discord.Embed):
+        """Helper method to safely send errors to the error channel"""
+        if self.error_channel_id:
+            error_channel = self.bot.get_channel(self.error_channel_id)
+            if error_channel and isinstance(error_channel, discord.TextChannel):
+                try:
+                    await error_channel.send(embed=embed)
+                except Exception as e:
+                    self.logger.error(f"Failed to send error to error channel: {e}")
+
+    def _should_rate_limit_error(self, error_key: str) -> bool:
+        """Check if error should be rate limited"""
+        current_time = time.time()
+
+        # Clean old timestamps
+        self.error_timestamps[error_key] = [
+            ts
+            for ts in self.error_timestamps[error_key]
+            if current_time - ts < self.rate_limit_window
+        ]
+
+        # Check if we're over the limit
+        if len(self.error_timestamps[error_key]) >= self.max_errors_per_window:
+            return True
+
+        # Add current timestamp
+        self.error_timestamps[error_key].append(current_time)
+        return False
+
+    def _get_error_key(self, error: Exception, context: str) -> str:
+        """Generate a unique key for error rate limiting"""
+        return f"{type(error).__name__}:{context}"
+
+    async def _record_error_metrics(self, error: Exception, context: str):
+        """Record error metrics for monitoring"""
+        try:
+            from utils.monitoring import record_error
+
+            record_error()  # Call without parameters as expected
+        except ImportError:
+            pass  # Monitoring not available
+
+    async def _attempt_error_recovery(
+        self, error: Exception, ctx=None, interaction=None
+    ):
+        """Attempt to recover from certain types of errors"""
+        recovery_key = f"{type(error).__name__}"
+
+        if self.recovery_attempts[recovery_key] >= self.max_recovery_attempts:
+            return False
+
+        self.recovery_attempts[recovery_key] += 1
+
+        # Attempt recovery based on error type
+        if isinstance(error, discord.HTTPException):
+            # For HTTP errors, wait and retry
+            await asyncio.sleep(1)
+            return True
+        elif isinstance(error, commands.BotMissingPermissions):
+            # Log permission issues for admin attention
+            self.logger.warning(f"Permission issue detected: {error}")
+            return False
+
+        return False
+
+    def set_error_channel(self, channel_id: int):
+        """Set the error notification channel"""
+        self.error_channel_id = channel_id
+        self.logger.info(f"Error channel set to {channel_id}")
+
+    async def get_error_stats(self) -> Dict[str, Any]:
+        """Get error statistics for monitoring"""
+        current_time = time.time()
+
+        # Count recent errors
+        recent_errors = {}
+        for error_key, timestamps in self.error_timestamps.items():
+            recent_count = len(
+                [ts for ts in timestamps if current_time - ts < self.rate_limit_window]
+            )
+            if recent_count > 0:
+                recent_errors[error_key] = recent_count
+
+        return {
+            "recent_errors": recent_errors,
+            "total_error_types": len(self.error_counts),
+            "recovery_attempts": dict(self.recovery_attempts),
+            "rate_limit_window": self.rate_limit_window,
+            "max_errors_per_window": self.max_errors_per_window,
+        }

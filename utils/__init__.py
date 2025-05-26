@@ -13,6 +13,21 @@ from dotenv import find_dotenv, load_dotenv
 
 import constants
 
+# Import opus loading utilities
+from .opus_loader import (
+    load_opus_library,
+    get_opus_installation_help,
+    verify_opus_functionality,
+)
+
+# Import enhancement utilities
+from .resource_manager import ResourceManager
+from .network_utils import network_manager, managed_session
+from .config_manager import get_config, get_token, is_admin, is_development
+from .logging_utils import setup_logging, get_logger, get_context_logger
+from .cache_utils import cache_manager, cached, rate_limited, get_cache_stats
+from .monitoring import init_monitoring, start_monitoring, record_command, record_error
+
 
 def to_thread(func: Callable) -> Coroutine:
     @functools.wraps(func)
@@ -87,7 +102,8 @@ def get_env(key: str) -> Union[str, None]:
 def setup_logger(name: str, level=logging.DEBUG):
     """Set up logging configuration"""
     # Create logs directory if it doesn't exist
-    Path(f"{constants.CUR_PATH}/logs").mkdir(exist_ok=True)
+    logs_dir = Path(f"{constants.CUR_PATH}/logs")
+    logs_dir.mkdir(exist_ok=True)
 
     # Create logger
     logger = logging.getLogger(name)
@@ -101,7 +117,7 @@ def setup_logger(name: str, level=logging.DEBUG):
 
     # File handler for all logs
     file_handler = logging.handlers.RotatingFileHandler(
-        filename="logs/bot.log",
+        filename=str(logs_dir / "bot.log"),
         encoding="utf-8",
         maxBytes=32 * 1024 * 1024,  # 32 MiB
         backupCount=5,
@@ -111,7 +127,7 @@ def setup_logger(name: str, level=logging.DEBUG):
 
     # File handler for errors only
     error_handler = logging.handlers.RotatingFileHandler(
-        filename="logs/error.log",
+        filename=str(logs_dir / "error.log"),
         encoding="utf-8",
         maxBytes=32 * 1024 * 1024,  # 32 MiB
         backupCount=5,
