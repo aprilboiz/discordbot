@@ -1,89 +1,37 @@
-FROM python:3.12-alpine AS builder
-
-RUN apk add --no-cache --virtual .build-deps \
-    gcc \
-    musl-dev \
-    libffi-dev \
-    openssl-dev \
-    cargo \
-    rust
-
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Stage 1: Build Python dependencies
+FROM python:3.12-slim-bookworm AS python-builder
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip
 
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies to a virtual environment with optimizations
-ENV UV_COMPILE_BYTECODE=1
-ENV UV_LINK_MODE=copy
-ENV UV_CACHE_DIR=/tmp/uv-cache
-RUN uv sync --locked --no-dev --no-cache && \
-    apk del .build-deps && \
-    rm -rf /tmp/* /var/cache/apk/* /root/.cache /root/.cargo && \
-    find /app/.venv -name "*.pyc" -delete && \
-    find /app/.venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/.venv -name "*.pyo" -delete && \
-    find /app/.venv -name "test*" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/.venv -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/.venv -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/.venv -type f -name "*.so" -exec strip {} + 2>/dev/null || true
+RUN pip install --no-cache-dir --prefix=/install .
 
-# Final stage - minimal runtime image
-FROM python:3.12-alpine
+# Stage 2: Runtime environment
+FROM python:3.12-slim-bookworm
 
+# Set timezone
 ENV TZ=Asia/Ho_Chi_Minh
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONPATH=/app
 
-RUN apk add --no-cache \
-    nodejs \
-    ffmpeg \
-    tzdata \
-    su-exec \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
-    && echo $TZ > /etc/timezone \
-    && rm -rf /tmp/* /var/cache/apk/* /usr/share/man /usr/share/doc /var/lib/apk/* \
-    && find /usr -name "*.a" -delete \
-    && find /usr -name "*.la" -delete
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup
-
-# Set working directory
 WORKDIR /app
 
-# Copy virtual environment from builder and set ownership
-COPY --from=builder --chown=appuser:appgroup /app/.venv /app/.venv
+# Install runtime dependencies in a single step
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    nodejs &&\
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Add virtual environment to PATH
-ENV PATH="/app/.venv/bin:$PATH"
+# Copy Python dependencies from the builder stage
+COPY --from=python-builder /install /usr/local
 
-# Copy application code (exclude unnecessary files)
-COPY --chown=appuser:appgroup *.py ./
-COPY --chown=appuser:appgroup cogs/ ./cogs/
-COPY --chown=appuser:appgroup core/ ./core/
-COPY --chown=appuser:appgroup mapper/ ./mapper/
-COPY --chown=appuser:appgroup patterns/ ./patterns/
-COPY --chown=appuser:appgroup utils/ ./utils/
+# Copy application code
+COPY . .
 
-# Copy entrypoint script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# Create required directories with proper permissions and ownership
-RUN mkdir -p logs temp_folder && \
-    chown -R appuser:appgroup /app && \
-    chmod -R 755 /app && \
-    find /app -type f -name "*.py" -exec chmod 644 {} + && \
-    find /app -type d -exec chmod 755 {} +
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
-
-# Use entrypoint script to handle permissions dynamically
-ENTRYPOINT ["/entrypoint.sh"]
+# Set the default command
 CMD ["python", "main.py"]
