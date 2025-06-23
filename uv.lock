@@ -480,11 +480,11 @@ wheels = [
 
 [[package]]
 name = "pytubefix"
-version = "9.2.0"
+version = "9.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5f/61/e5ddfe61efd62114a17ce6e4de179dc6ed7f42bd075decbec592ef16fa66/pytubefix-9.2.0.tar.gz", hash = "sha256:40d1979f5873d17953f7d91d82ca0b25dd0182b3cc9d36fa43d8be462636aac1", size = 751615, upload-time = "2025-06-18T02:24:35.496Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/be/dabc1bed948fe161f26f44e0680bcbae3b870fc963ff2d891ef5a3e43ac9/pytubefix-9.2.1.tar.gz", hash = "sha256:816f7718094b21595ebffa4af73d7ff0e3bbeef9659961c742c97cf01c06f3de", size = 751559, upload-time = "2025-06-23T01:49:43.299Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/80/05/2c806e9b4a997f42756e1aef1d33ea80f8d8844124f79f80ba7bc3b8aae2/pytubefix-9.2.0-py3-none-any.whl", hash = "sha256:06c428a6f28e6e8719bd97036e363151197d1708cd65d508ad1b95f035371a05", size = 758496, upload-time = "2025-06-18T02:24:32.915Z" },
+    { url = "https://files.pythonhosted.org/packages/09/86/fe9dafd9b5a05bd6aedc89d2e826c0b7cdd391e763a9de4eed5501c9d022/pytubefix-9.2.1-py3-none-any.whl", hash = "sha256:59312d33fffc7d75c9387892c8944faaf48a057b431d713cbe2c69e812223055", size = 758498, upload-time = "2025-06-23T01:49:40.962Z" },
 ]
 
 [[package]]
