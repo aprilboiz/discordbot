@@ -13,10 +13,9 @@ from cogs.music.core.song import (
 from cogs.music.services.soundcloud.service import SoundCloudService
 from cogs.music.services.spotify import album, playlist, search, track
 from cogs.music.services.spotify.service import SpotifyService
+from cogs.music.services.youtube_service import YouTubeService, VideoUnavailable
 from core.exceptions import ExtractException
 from discord.ext import commands
-from pytubefix import Playlist, Search, YouTube
-from pytubefix.exceptions import VideoUnavailable
 from soundcloud import BasicTrack, MiniTrack
 from soundcloud.resource.track import Track
 
@@ -46,25 +45,26 @@ class Extractor(ABC):
 class YoutubeExtractor(Extractor):
     def __init__(self) -> None:
         super().__init__()
+        self.youtube_service = YouTubeService()
 
     async def create_song_metadata(
-        self, yt: YouTube, ctx: commands.Context, playlist_name: str | None
+        self, yt_video, ctx: commands.Context, playlist_name: str | None
     ) -> YouTubeSongMeta:
         return YouTubeSongMeta(
-            title=yt.title,
-            duration=format_duration(yt.length),
-            video_id=yt.video_id,
+            title=yt_video.title,
+            duration=format_duration(yt_video.length),
+            video_id=yt_video.video_id,
             ctx=ctx,
             playlist_name=playlist_name,
-            webpage_url=yt.watch_url,
-            author=yt.author,
+            webpage_url=yt_video.watch_url,
+            author=yt_video.author,
         )
 
     async def get_data(
         self, query: str, ctx, is_search=False, is_playlist=False, limit=1
     ) -> List[YouTubeSongMeta] | None:
         if is_search:
-            results = Search(query, client="WEB").videos
+            results = await self.youtube_service.search_videos(query, limit)
             if results:
                 songs = await asyncio.gather(
                     *[
@@ -76,23 +76,26 @@ class YoutubeExtractor(Extractor):
             return None
 
         if is_playlist:
-            playlist = Playlist(query, client="WEB")
-            songs = await asyncio.gather(
-                *[
-                    self.create_song_metadata(video, ctx, playlist.title)
-                    for video in playlist.videos
-                ]
-            )
-            return songs
+            try:
+                playlist = await self.youtube_service.get_playlist_info(query)
+                songs = await asyncio.gather(
+                    *[
+                        self.create_song_metadata(video, ctx, playlist.title)
+                        for video in playlist.videos
+                    ]
+                )
+                return songs
+            except Exception as e:
+                _log.error(f"Error extracting playlist: {e}")
+                return None
         else:
             try:
-                yt = YouTube(query, client="WEB")
-
+                yt_video = await self.youtube_service.get_video_info(query)
+                yt_video.check_availability()
+                song = await self.create_song_metadata(yt_video, ctx, None)
+                return [song]
             except VideoUnavailable:
                 return None
-
-            song = await self.create_song_metadata(yt, ctx, None)
-            return [song]
 
 
 class SoundCloudExtractor(Extractor):

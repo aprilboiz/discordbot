@@ -7,9 +7,8 @@ from cogs.music.core.album import Album
 from cogs.music.services.soundcloud.service import SoundCloudService
 from cogs.music.services.spotify import track
 from cogs.music.services.spotify.service import SpotifyService
+from cogs.music.services.youtube_service import YouTubeService, VideoUnavailable
 from discord.ext import commands
-from pytubefix import Search, YouTube
-from pytubefix.exceptions import VideoUnavailable
 from soundcloud import BasicTrack, Track
 from utils import format_duration, format_playback_count, safe_format_date, safe_getattr
 
@@ -101,7 +100,7 @@ class YouTubeSongMeta(SongMeta):
 
     video_id: str
 
-    def update_meta(self, video: YouTube) -> None:
+    def update_meta(self, video) -> None:
         self.title = video.title
         self.duration = format_duration(video.length)
         self.webpage_url = video.watch_url
@@ -148,13 +147,15 @@ async def createSong(song_meta: SongMeta) -> Union[Song, None]:
 @createSong.register  # type: ignore
 async def _(song_meta: YouTubeSongMeta) -> Union[Song, None]:
     url = f"https://www.youtube.com/watch?v={song_meta.video_id}"
-    video = YouTube(url, client="WEB")
+    youtube_service = YouTubeService()
     try:
+        video = await youtube_service.get_video_info(url)
         video.check_availability()
     except VideoUnavailable:
         _logger.error(f"This YouTube video is unavailable. ID: {song_meta.video_id}. Title: {song_meta.title}")
         return None
-    playback_url = video.streams.get_audio_only().url
+    
+    playback_url = video.get_audio_url()
 
     return Song(
         title=video.title,
@@ -162,7 +163,7 @@ async def _(song_meta: YouTubeSongMeta) -> Union[Song, None]:
         uploader=video.author,
         playback_count=format_playback_count(video.views),
         duration=song_meta.duration,
-        upload_date=safe_format_date(video.publish_date),
+        upload_date=video.publish_date or "Unknown",
         thumbnail=video.thumbnail_url,
         webpage_url=video.watch_url,
         album=Album(song_meta.playlist_name) if song_meta.playlist_name else None,
@@ -201,7 +202,8 @@ async def _(song_meta: SpotifySongMeta) -> Union[Song, None]:
 
     query = f"'{','.join(artist.name for artist in song.artists)}' '{song.name}' Topic YouTube Music"
     video = None  # type: ignore
-    videos = Search(query, client="WEB").videos
+    youtube_service = YouTubeService()
+    videos = await youtube_service.search_videos(query, limit=5)
     _logger.info(f'Creating Spotify song: Searching for "{query}"')
 
     for vid in videos:
@@ -211,10 +213,21 @@ async def _(song_meta: SpotifySongMeta) -> Union[Song, None]:
             break
 
     # If no video match criteria, use the first video
-    if video is None:
+    if video is None and videos:
         video = videos[0]
+    
+    if video is None:
+        _logger.error(f"No YouTube video found for Spotify track: {song.name}")
+        return None
 
-    playback_url = video.streams.get_audio_only().url
+    # Get full video info if needed for audio URL
+    video = await video.get_full_info(youtube_service)
+    playback_url = video.get_audio_url()
+    
+    if not playback_url:
+        _logger.error(f"Could not get audio URL for video: {video.title}")
+        return None
+    
     _logger.info(
         f'Creating Spotify song: Actual playback of "{song.name}" is from "[{video.title}]({video.watch_url})"'
     )
@@ -248,8 +261,9 @@ async def get_songs_info(songs_need_to_update: List[SongMeta]) -> List[SongMeta]
             sp_songs.append(song)
 
     # Get YouTube info
+    youtube_service = YouTubeService()
     for song in yt_songs:
-        video = YouTube(f"https://www.youtube.com/watch?v={song.video_id}", client="WEB")
+        video = await youtube_service.get_video_info(f"https://www.youtube.com/watch?v={song.video_id}")
         song.update_meta(video)
 
     # Get SoundCloud info

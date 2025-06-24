@@ -35,9 +35,10 @@ bot = Bot()
 
 @bot.event
 async def on_ready() -> None:
-    msg: str = f"Logged in as {bot.user} (ID: {bot.user.id})"
-    print(msg)
-    print("-" * len(msg))
+    if bot.user:
+        msg: str = f"Logged in as {bot.user} (ID: {bot.user.id})"
+        print(msg)
+        print("-" * len(msg))
 
 
 async def init_bot() -> None:
@@ -46,7 +47,7 @@ async def init_bot() -> None:
     setup_logger(name="discord", level=logging.INFO)
     setup_logger(name="cogs")
     setup_logger(name="discordbot")
-    setup_logger(name="pytubefix", level=logging.INFO)
+    setup_logger(name="yt_dlp", level=logging.INFO)
 
     async with bot:
         token = get_env(key="TOKEN")
@@ -64,7 +65,7 @@ def run_bot():
         asyncio.run(init_bot())
     except KeyboardInterrupt:
         for vc in bot.voice_clients:
-            vc.disconnect()
+            asyncio.create_task(vc.disconnect(force=True))
         print("Bot terminated by host.")
     except Exception:
         print(

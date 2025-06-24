@@ -23,8 +23,7 @@ WORKDIR /app
 
 # Install runtime dependencies in a single step
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    nodejs &&\
+    ffmpeg &&\
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from the builder stage
