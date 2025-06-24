@@ -131,32 +131,56 @@ class SoundCloudExtractor(Extractor):
         self, query, ctx, is_search=False, limit=1
     ) -> List[SoundCloudSongMeta] | None:
         if is_search:
-            data = await self.soundcloud.search(query)
-            tracks = []
-            for _ in range(limit):
-                track = next(data)
-                while not isinstance(track, (Track, BasicTrack)):
-                    track = next(data)
-                tracks.append(track)
+            try:
+                data = self.soundcloud.search(query)
+                # Edge case: Handle if search returns a coroutine
+                if hasattr(data, '__await__'):
+                    data = await data
+                    
+                tracks = []
+                for _ in range(limit):
+                    try:
+                        track = next(data)
+                        while not isinstance(track, (Track, BasicTrack)):
+                            track = next(data)
+                        tracks.append(track)
+                    except StopIteration:
+                        break
 
+                songs = await asyncio.gather(
+                    *[self.create_song_metadata(track, ctx, None) for track in tracks]
+                )
+                return songs
+            except Exception as e:
+                _log.error(f"Error searching SoundCloud: {e}")
+                return None
+
+        # Handle SoundCloud playlist/set URLs
+        try:
+            data = await self.soundcloud.extract_song_from_url(query)
+
+            if data is None:
+                raise ExtractException("Failed to extract song from SoundCloud URL")
+
+            playlist_name = data["playlist_name"]
+            tracks = data["tracks"]
+            
+            # If limit is 1 and this is a playlist, return just the first track
+            if limit == 1 and len(tracks) > 1:
+                first_track = tracks[0]
+                song = await self.create_song_metadata(first_track, ctx, playlist_name)
+                return [song]
+            
+            # Otherwise process all tracks (or up to limit)
+            tracks_to_process = tracks[:limit] if limit > 1 else tracks
             songs = await asyncio.gather(
-                *[self.create_song_metadata(track, ctx, None) for track in tracks]
+                *[self.create_song_metadata(track, ctx, playlist_name) for track in tracks_to_process]
             )
-
+            _log.info(f"Extracted {len(songs)} song(s) from SoundCloud URL.")
             return songs
-
-        data = await self.soundcloud.extract_song_from_url(query)
-
-        if data is None:
-            raise ExtractException("Failed to extract song from SoundCloud URL")
-
-        playlist_name = data["playlist_name"]
-        tracks = data["tracks"]
-        songs = await asyncio.gather(
-            *[self.create_song_metadata(track, ctx, playlist_name) for track in tracks]
-        )
-        _log.info(f"Extracted {len(songs)} song(s) from SoundCloud URL.")
-        return songs
+        except Exception as e:
+            _log.error(f"Error extracting SoundCloud data: {e}")
+            return None
 
 
 class SpotifyExtractor(Extractor):
