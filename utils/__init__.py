@@ -23,10 +23,34 @@ def to_thread(func: Callable) -> Coroutine:
 
 
 def convert_to_second(time: str) -> float:
-    """Converts a time string with '%H:%M:%S' format to seconds."""
-    parsed_datetime: datetime = datetime.strptime(time, "%H:%M:%S")
-    dt: timedelta = parsed_datetime - datetime(1900, 1, 1)
-    return dt.total_seconds()
+    """Converts a time string with '%H:%M:%S' or '%M:%S' format to seconds."""
+    try:
+        # First try the standard HH:MM:SS format
+        parsed_datetime: datetime = datetime.strptime(time, "%H:%M:%S")
+        dt: timedelta = parsed_datetime - datetime(1900, 1, 1)
+        return dt.total_seconds()
+    except ValueError:
+        try:
+            # If that fails, try MM:SS format by adding hours
+            parsed_datetime: datetime = datetime.strptime(f"00:{time}", "%H:%M:%S")
+            dt: timedelta = parsed_datetime - datetime(1900, 1, 1)
+            return dt.total_seconds()
+        except ValueError:
+            # If both formats fail, try to parse manually
+            try:
+                parts = time.split(':')
+                if len(parts) == 2:  # MM:SS format
+                    minutes, seconds = map(int, parts)
+                    return minutes * 60 + seconds
+                elif len(parts) == 3:  # HH:MM:SS format
+                    hours, minutes, seconds = map(int, parts)
+                    return hours * 3600 + minutes * 60 + seconds
+                else:
+                    # Invalid format, return 0
+                    return 0.0
+            except (ValueError, TypeError):
+                # If all parsing fails, return 0
+                return 0.0
 
 
 def convert_to_time(seconds: float) -> str:

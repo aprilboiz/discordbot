@@ -196,6 +196,38 @@ class PlayList(Observable):
         # Clear prepared songs cache
         self._prepared_songs.clear()
 
+    def cancel_background_loading(self) -> None:
+        """
+        Cancel any ongoing background loading operations.
+        Useful for when playlists are cleared or interrupted.
+        """
+        self._background_loading = False
+        
+        # Cancel active preparation tasks
+        for task in list(self._preparation_tasks.values()):
+            if not task.done():
+                task.cancel()
+        
+        _logger.info(f"Cancelled {len(self._preparation_tasks)} background loading tasks")
+        self._preparation_tasks.clear()
+
+    def is_background_loading(self) -> bool:
+        """Check if background loading is currently active"""
+        return self._background_loading or len(self._preparation_tasks) > 0
+
+    def get_background_loading_stats(self) -> dict:
+        """Get statistics about background loading"""
+        active_tasks = sum(1 for task in self._preparation_tasks.values() if not task.done())
+        completed_tasks = sum(1 for task in self._preparation_tasks.values() if task.done())
+        
+        return {
+            'is_loading': self.is_background_loading(),
+            'active_tasks': active_tasks,
+            'completed_tasks': completed_tasks,
+            'prepared_songs': len(self._prepared_songs),
+            'queue_size': self.size()
+        }
+
     def time_wait(self, to_song_index: int | None = None) -> str:
         """
         Calculate the total duration of songs in the queue up to a specified index.

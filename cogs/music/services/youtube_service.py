@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 import yt_dlp
 from utils import to_thread
 
@@ -404,4 +404,122 @@ class YouTubeService:
                 'files': file_count
             }
         except Exception as e:
-            return {'status': 'error', 'error': str(e)} 
+            return {'status': 'error', 'error': str(e)}
+    
+    async def get_first_playlist_track_fast(self, url: str) -> Optional[YouTubeVideo]:
+        """
+        Ultra-fast extraction of just the first track from a playlist for immediate playback.
+        Uses optimized yt-dlp options for minimal latency.
+        """
+        def _get_first():
+            try:
+                opts = {
+                    **self.ydl_opts,
+                    'playliststart': 1,
+                    'playlistend': 1,
+                    'extract_flat': False,  # Need full info for playback
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if info and 'entries' in info and info['entries']:
+                        first_entry = info['entries'][0]
+                        if first_entry and first_entry.get('id'):
+                            return YouTubeVideo(first_entry)
+                    elif info and info.get('id'):  # Single video
+                        return YouTubeVideo(info)
+                    
+                return None
+                
+            except yt_dlp.DownloadError as e:
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['unavailable', 'private', 'deleted']):
+                    _log.warning(f"First playlist track unavailable: {e}")
+                    return None
+                raise YouTubeDLError(f"Error extracting first track: {e}")
+            except Exception as e:
+                raise YouTubeDLError(f"Unexpected error getting first track: {e}")
+        
+        try:
+            return await asyncio.to_thread(_get_first)
+        except Exception as e:
+            _log.error(f"Failed to get first playlist track: {e}")
+            return None
+
+    async def get_flat_playlist_info(self, url: str) -> Dict[str, Any]:
+        """
+        Extract playlist metadata using flat extraction for maximum speed.
+        Returns basic info about all tracks without downloading full metadata.
+        """
+        def _get_flat():
+            try:
+                with yt_dlp.YoutubeDL(self.metadata_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    if not info:
+                        return {}
+                    
+                    # Clean up and filter entries
+                    if 'entries' in info:
+                        valid_entries = []
+                        for entry in info['entries']:
+                            if entry and entry.get('id') and entry.get('title'):
+                                # Add basic metadata for quick processing
+                                valid_entries.append({
+                                    'id': entry['id'],
+                                    'title': entry.get('title', 'Unknown Title'),
+                                    'duration': entry.get('duration'),
+                                    'uploader': entry.get('uploader', entry.get('channel', 'Unknown')),
+                                    'url': f"https://www.youtube.com/watch?v={entry['id']}"
+                                })
+                        
+                        info['entries'] = valid_entries
+                        _log.info(f"Flat playlist extracted: {len(valid_entries)} valid tracks")
+                    
+                    return info
+                    
+            except yt_dlp.DownloadError as e:
+                _log.error(f"Error extracting flat playlist: {e}")
+                return {}
+            except Exception as e:
+                _log.error(f"Unexpected flat playlist error: {e}")
+                return {}
+        
+        try:
+            return await asyncio.to_thread(_get_flat)
+        except Exception as e:
+            _log.error(f"Failed to get flat playlist info: {e}")
+            return {}
+
+    async def batch_create_video_metadata(self, flat_entries: List[Dict[str, Any]]) -> List[YouTubeVideo]:
+        """
+        Efficiently create YouTubeVideo objects from flat playlist entries.
+        Uses minimal processing for faster background loading.
+        """
+        videos = []
+        
+        for entry in flat_entries:
+            try:
+                if not entry.get('id'):
+                    continue
+                
+                # Create minimal video info dict
+                video_info = {
+                    'id': entry['id'],
+                    'title': entry.get('title', 'Unknown Title'),
+                    'uploader': entry.get('uploader', 'Unknown'),
+                    'duration': entry.get('duration', 0),
+                    'view_count': entry.get('view_count', 0),
+                    'thumbnail': entry.get('thumbnail', ''),
+                    'upload_date': entry.get('upload_date'),
+                    'webpage_url': entry.get('url', f"https://www.youtube.com/watch?v={entry['id']}")
+                }
+                
+                videos.append(YouTubeVideo(video_info))
+                
+            except Exception as e:
+                _log.warning(f"Error creating video metadata for {entry.get('id', 'unknown')}: {e}")
+        
+        return videos 

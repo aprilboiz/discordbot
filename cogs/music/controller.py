@@ -7,6 +7,13 @@ from typing import List, Optional, Union, Literal
 
 from cogs.music.manager import PlayerManager, PlaylistManager
 from cogs.music.core.song import Song, SongMeta, YouTubeSongMeta, SoundCloudSongMeta
+from cogs.music.core.background_playlist_loader import (
+    BackgroundPlaylistLoader, 
+    PlaylistLoaderProtocol, 
+    PlaylistLoadResult, 
+    BackgroundLoadProgress,
+    LoadingState
+)
 from cogs.music.view.view import MusicView
 import constants
 import discord
@@ -19,7 +26,7 @@ from utils import Timer, convert_to_second, get_time
 _log = logging.getLogger(__name__)
 
 
-class Audio:
+class Audio(PlaylistLoaderProtocol):
     def __init__(self, *args, **kwargs) -> None:
         self.bot = None
         self.playlist_manager = PlaylistManager()
@@ -28,6 +35,10 @@ class Audio:
         self.ctx: Optional[commands.Context] = None
         self.timer = Timer(callback=self.timeout_handle, ctx=self.ctx)
         self.lock = asyncio.Lock()
+        
+        # Initialize optimized playlist loader
+        self.background_loader = BackgroundPlaylistLoader(callback=self, batch_size=8)
+        self._loading_message: Optional[discord.Message] = None
 
         for arg in args:
             if (
@@ -114,11 +125,10 @@ class Audio:
         Callback function to be called after a song finishes playing with enhanced error handling.
         """
         try:
-            # Edge case: Validate voice client exists before checking state (safely)
+            # Check if voice client is still playing
             voice_client_playing = False
             try:
-                if (ctx.voice_client and 
-                    hasattr(ctx.voice_client, 'is_playing')):
+                if ctx.voice_client:
                     voice_client_playing = ctx.voice_client.is_playing()
             except Exception:
                 # If we can't check playing status, assume not playing
@@ -140,21 +150,11 @@ class Audio:
         """
         ctx = song.context
         
-        # Edge case: Validate voice client exists and is connected
+        # Edge case: Validate voice client exists
         if not ctx.voice_client:
             _log.error("Cannot play song: No voice client available")
             self.after_play(self.bot, ctx)
             return
-             
-        # Edge case: Check if voice client is still connected (safely)
-        try:
-            if hasattr(ctx.voice_client, 'is_connected') and not ctx.voice_client.is_connected():
-                _log.error("Cannot play song: Voice client is not connected")
-                self.after_play(self.bot, ctx)
-                return
-        except Exception:
-            # If we can't check connection status, continue anyway
-            pass
         
         self.playlist_manager.current_song_start_time = convert_to_second(get_time())
         self.playlist_manager.current_song_duration = convert_to_second(song.duration)
@@ -175,13 +175,9 @@ class Audio:
             await ctx.reply(embed=embed)
 
             self.playlist_manager.current_song = song
-            # Edge case: Ensure voice client supports play method (safely)
+            # Play the song using voice client
             try:
-                if hasattr(ctx.voice_client, 'play'):
-                    ctx.voice_client.play(source, after=lambda x: self.after_play(self.bot, ctx))
-                else:
-                    _log.error("Voice client does not support play method")
-                    self.after_play(self.bot, ctx)
+                ctx.voice_client.play(source, after=lambda x: self.after_play(self.bot, ctx))
             except Exception as e:
                 _log.error(f"Error calling voice client play method: {e}")
                 self.after_play(self.bot, ctx)
@@ -202,32 +198,32 @@ class Audio:
             await self._send_no_songs_found_message()
             return
         
-        # Check if this is a playlist URL that might contain multiple songs
-        search = Search()
+        # Check if this is a playlist URL that can be optimized
+        if self.background_loader._is_playlist_url(query):
+            result = await self.background_loader.load_playlist_optimized(query, ctx, priority)
+            if result:
+                # Successfully started optimized playlist loading
+                self._log_song_addition(1, ctx.guild.id if ctx.guild else None, query, start_time)
+                return
+            # If optimized loading fails, fall back to traditional method
+            _log.info("Optimized playlist loading failed, falling back to traditional method")
         
-        # Convert YouTube Music URLs to regular YouTube URLs
-        if "music.youtube.com" in query:
-            query = query.replace("music.youtube.com", "www.youtube.com")
-            _log.info(f"Converted YouTube Music URL to: {query}")
-        
-        is_playlist_url = search.is_url(query) and ("/playlist?" in query or "&list=" in query or 
-                                                   "soundcloud.com/sets/" in query or 
-                                                   "spotify.com/playlist/" in query or
-                                                   "spotify.com/album/" in query)
-        
-        if is_playlist_url:
-            # For playlists, prioritize immediate playback of first song
-            await self._process_playlist_optimized(ctx, query, priority, start_time)
-        else:
-            # For single songs, use the existing flow
-            songs = await self._search_songs(query, priority)
-            if songs:
-                await self.playlist_manager.add_songs(songs, priority)
-                guild_id = getattr(ctx.guild, 'id', None) if ctx.guild else None
-                self._log_song_addition(len(songs), guild_id, query, start_time)
-                await self._send_song_added_message(songs[0], priority)
+        # Traditional single song or non-optimizable playlist handling
+        songs = await self._search_songs(query, priority)
+        if songs:
+            # Filter out None values before adding to playlist
+            valid_songs = [song for song in songs if song is not None]
+            if valid_songs:
+                await self.playlist_manager.add_songs(valid_songs, priority)
+                
+                latest_song = valid_songs[-1]
+                await self._send_song_added_message(latest_song, priority)
+                
+                self._log_song_addition(len(valid_songs), ctx.guild.id if ctx.guild else None, query, start_time)
             else:
                 await self._send_no_songs_found_message()
+        else:
+            await self._send_no_songs_found_message()
 
     async def process_search(
         self,
@@ -350,11 +346,10 @@ class Audio:
             return
              
         try:
-            # Edge case: Validate voice client exists before checking state (safely)
+            # Check if voice client is still playing
             voice_client_playing = False
             try:
-                if (ctx.voice_client and 
-                    hasattr(ctx.voice_client, 'is_playing')):
+                if ctx.voice_client:
                     voice_client_playing = ctx.voice_client.is_playing()
             except Exception:
                 # If we can't check playing status, assume not playing
@@ -367,15 +362,15 @@ class Audio:
                     "Timer has been reset because discord.voice_client is still playing."
                 )
             else:
-                # Edge case: Safely handle player cleanup
+                # Safely handle player cleanup
                 playerManager = PlayerManager()
                 guild_id = getattr(ctx.guild, 'id', None) if ctx.guild else None
                 if guild_id and guild_id in playerManager.players:
                     del playerManager.players[guild_id]
                 
-                # Edge case: Safely disconnect voice client
+                # Safely disconnect voice client
                 try:
-                    if ctx.voice_client and hasattr(ctx.voice_client, 'disconnect'):
+                    if ctx.voice_client:
                         await ctx.voice_client.disconnect(force=True)
                 except Exception as e:
                     _log.warning(f"Error disconnecting voice client: {e}")
@@ -637,14 +632,12 @@ class Audio:
             # Disconnect from voice
             if ctx.voice_client:
                 try:
-                    if hasattr(ctx.voice_client, 'stop'):
-                        ctx.voice_client.stop()
+                    ctx.voice_client.stop()
                 except Exception as e:
                     _log.warning(f"Error stopping voice client: {e}")
                 
                 try:
-                    if hasattr(ctx.voice_client, 'disconnect'):
-                        await ctx.voice_client.disconnect(force=True)
+                    await ctx.voice_client.disconnect(force=True)
                 except Exception as e:
                     _log.warning(f"Error disconnecting voice client: {e}")
             
@@ -652,3 +645,101 @@ class Audio:
             
         except Exception as e:
             _log.error(f"Error during graceful shutdown: {e}")
+
+    # BackgroundPlaylistLoader callback implementations
+    async def on_first_song_ready(self, result: PlaylistLoadResult) -> None:
+        """Handle when the first song is ready for immediate playback"""
+        try:
+            if not self.ctx or not result.first_song:
+                return
+            
+            # Add the first song to the queue with priority
+            await self.playlist_manager.add_songs([result.first_song], priority=False)
+            
+            # Send first song added message
+            await self._send_song_added_message(result.first_song, priority=False)
+            
+            # If there are more songs expected, show loading message
+            if result.total_expected > 1:
+                remaining_count = result.total_expected - 1
+                loading_embed = Embed().ok(
+                    f"🎵 **{result.first_song.title}** is now playing!\n"
+                    f"📥 Loading {remaining_count} more songs from **{result.playlist_name or 'playlist'}** in the background..."
+                )
+                self._loading_message = await self.ctx.send(embed=loading_embed)
+            
+        except Exception as e:
+            _log.error(f"Error handling first song ready: {e}")
+
+    async def on_batch_loaded(self, songs: List[SongMeta], progress: BackgroundLoadProgress) -> None:
+        """Handle when a batch of songs is loaded"""
+        try:
+            if not self.ctx:
+                return
+            
+            # Add the batch to the playlist
+            await self.playlist_manager.add_songs(songs, priority=False)
+            
+            # Update loading message every few batches for large playlists
+            if progress.current_batch % 3 == 0 and self._loading_message:
+                try:
+                    embed = Embed().ok(
+                        f"📥 Loading playlist... ({progress.loaded_count}/{progress.total_count} songs loaded)"
+                    )
+                    await self._loading_message.edit(embed=embed)
+                except discord.NotFound:
+                    self._loading_message = None
+                except Exception as e:
+                    _log.debug(f"Could not update loading message: {e}")
+            
+        except Exception as e:
+            _log.error(f"Error handling batch loaded: {e}")
+
+    async def on_loading_complete(self, total_loaded: int, failed_count: int) -> None:
+        """Handle when background loading is complete"""
+        try:
+            if not self.ctx:
+                return
+            
+            # Update or send completion message
+            if self._loading_message:
+                try:
+                    success_count = total_loaded - failed_count
+                    if failed_count > 0:
+                        embed = Embed().ok(
+                            f"✅ Playlist loaded! Added {success_count} songs to queue.\n"
+                            f"⚠️ {failed_count} songs couldn't be loaded."
+                        )
+                    else:
+                        embed = Embed().ok(
+                            f"✅ Playlist fully loaded! Added {total_loaded} songs to queue."
+                        )
+                    await self._loading_message.edit(embed=embed)
+                    
+                    # Auto-delete after 10 seconds
+                    await asyncio.sleep(10)
+                    await self._loading_message.delete()
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    _log.debug(f"Could not update completion message: {e}")
+                finally:
+                    self._loading_message = None
+            
+        except Exception as e:
+            _log.error(f"Error handling loading complete: {e}")
+
+    async def on_loading_error(self, error: Exception, can_retry: bool) -> None:
+        """Handle loading errors"""
+        try:
+            if not self.ctx:
+                return
+            
+            error_msg = f"❌ Error loading playlist: {str(error)[:100]}"
+            if can_retry:
+                error_msg += "\nYou can try again or use a different playlist."
+            
+            await self.ctx.send(embed=Embed().error(error_msg), delete_after=15)
+            
+        except Exception as e:
+            _log.error(f"Error handling loading error: {e}")
