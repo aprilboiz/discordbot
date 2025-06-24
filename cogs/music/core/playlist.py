@@ -232,20 +232,25 @@ class PlayList(Observable):
 
     def get_next(self) -> SongMeta | None:
         """
-        Get the next song meta and remove it from queue.
-        Priority songs are returned first, then regular queue.
-        Edge case: Handle empty queues and priority interruptions.
+        Retrieves the next song from the playlist with proper priority handling.
+        Priority songs always play before regular queue songs.
+        
+        Returns:
+            SongMeta | None: The next song to play, or None if the playlist is empty.
         """
-        # Check priority queue first
+        # First check priority queue
         if self._priority_queue:
             priority_item = heapq.heappop(self._priority_queue)
+            _logger.debug(f"Returning priority song: {priority_item.song.title}")
             return priority_item.song
         
-        # Fall back to regular queue
-        try:
-            return self._q.popleft()
-        except IndexError:
-            return None
+        # Then check regular queue
+        if self._q:
+            song = self._q.popleft()
+            _logger.debug(f"Returning regular queue song: {song.title}")
+            return song
+        
+        return None
 
     async def get_next_prepared(self) -> Song | None:
         """
@@ -296,14 +301,18 @@ class PlayList(Observable):
         
         if isinstance(song_meta, YouTubeSongMeta):
             id_info = song_meta.video_id
-            reason = f"The requested YouTube song '{song_meta.title}' may not be available"
+            reason = f"The requested YouTube song '{song_meta.title}' may not be available, age-restricted, or region-blocked"
         elif isinstance(song_meta, SoundCloudSongMeta):
             id_info = song_meta.track_id
-            reason = f"The requested SoundCloud song '{song_meta.title}' may not be available. Or the song ID is not correct."
+            reason = f"The requested SoundCloud song '{song_meta.title}' may not be available, region-restricted, or have expired playback URLs. Try refreshing the playlist or using alternative sources."
 
         _logger.error(
             f"Failed to create song with type: {type(song_meta)}. Title: {song_meta.title}. ID: {id_info}. Reason: {reason}"
         )
+        
+        # For SoundCloud failures, add a small delay to avoid rapid retry cycles
+        if isinstance(song_meta, SoundCloudSongMeta):
+            await asyncio.sleep(0.5)
 
     def _prepare_upcoming_songs(self) -> None:
         """

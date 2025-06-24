@@ -58,8 +58,9 @@ class Audio:
         """
         async with self.lock:
             if not self.is_playing:
-                max_retries = 3  # Try up to 3 songs before giving up
+                max_retries = 5  # Try up to 5 songs before giving up
                 retries = 0
+                consecutive_soundcloud_failures = 0
                 
                 while retries < max_retries:
                     try:
@@ -78,13 +79,31 @@ class Audio:
                             
                     except Exception as e:
                         retries += 1
-                        _log.error(f"Error preparing song (attempt {retries}/{max_retries}): {e}")
+                        error_msg = str(e)
+                        
+                        # Track SoundCloud-specific failures
+                        if "soundcloud" in error_msg.lower() or "404" in error_msg:
+                            consecutive_soundcloud_failures += 1
+                            _log.warning(f"SoundCloud playback error (attempt {retries}/{max_retries}): {e}")
+                            
+                            # If we have too many consecutive SoundCloud failures, notify the user
+                            if consecutive_soundcloud_failures >= 3 and ctx is not None:
+                                await ctx.send(
+                                    embed=Embed().error("⚠️ Multiple SoundCloud tracks are unavailable. This may be due to region restrictions or expired links."),
+                                    delete_after=15
+                                )
+                        else:
+                            consecutive_soundcloud_failures = 0  # Reset counter for non-SoundCloud errors
+                            _log.error(f"Error preparing song (attempt {retries}/{max_retries}): {e}")
                         
                         if retries >= max_retries:
                             _log.error("Max retries reached, stopping playback")
                             self.is_playing = False
                             if ctx is not None:
-                                await ctx.send(embed=Embed().error("❌ Unable to play songs from queue. Please try again."))
+                                if consecutive_soundcloud_failures >= 3:
+                                    await ctx.send(embed=Embed().error("❌ Multiple SoundCloud tracks failed to load. Please try adding tracks from other sources or check if the tracks are available in your region."))
+                                else:
+                                    await ctx.send(embed=Embed().error("❌ Unable to play songs from queue. Please try again."))
                             break
                         
                         # Continue to next song
@@ -464,8 +483,8 @@ class Audio:
                 _log.warning("Guild no longer available, cancelling background playlist processing")
                 return
                 
-            # Get all songs from the playlist
-            all_songs = await self._search_songs(query, priority)
+            # Get all songs from the playlist with unlimited limit
+            all_songs = await self._search_songs(query, priority, limit=0)
             
             if not all_songs or len(all_songs) <= 1:
                 return

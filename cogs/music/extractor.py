@@ -165,21 +165,33 @@ class SoundCloudExtractor(Extractor):
             playlist_name = data["playlist_name"]
             tracks = data["tracks"]
             
-            # If limit is 1 and this is a playlist, return just the first track
-            if limit == 1 and len(tracks) > 1:
-                first_track = tracks[0]
-                song = await self.create_song_metadata(first_track, ctx, playlist_name)
-                return [song]
+            _log.info(f"Extracted SoundCloud data: playlist_name='{playlist_name}', track_count={len(tracks)}")
             
-            # Otherwise process all tracks (or up to limit)
-            tracks_to_process = tracks[:limit] if limit > 1 else tracks
-            songs = await asyncio.gather(
-                *[self.create_song_metadata(track, ctx, playlist_name) for track in tracks_to_process]
-            )
-            _log.info(f"Extracted {len(songs)} song(s) from SoundCloud URL.")
-            return songs
+            # For playlists/sets, respect the limit but handle special cases
+            if len(tracks) > 1:
+                # This is a playlist/set
+                if limit == 1:
+                    # Only return first track for initial playback
+                    first_track = tracks[0]
+                    song = await self.create_song_metadata(first_track, ctx, playlist_name)
+                    _log.info(f"Returning first track from SoundCloud playlist: '{first_track.title}'")
+                    return [song]
+                else:
+                    # Return all tracks or up to limit (0 means unlimited)
+                    tracks_to_process = tracks if limit <= 0 else tracks[:limit]
+                    songs = await asyncio.gather(
+                        *[self.create_song_metadata(track, ctx, playlist_name) for track in tracks_to_process]
+                    )
+                    _log.info(f"Extracted {len(songs)} song(s) from SoundCloud playlist/set (requested limit: {limit}).")
+                    return songs
+            else:
+                # Single track
+                song = await self.create_song_metadata(tracks[0], ctx, playlist_name)
+                _log.info(f"Extracted single SoundCloud track: '{tracks[0].title}'")
+                return [song]
+                
         except Exception as e:
-            _log.error(f"Error extracting SoundCloud data: {e}")
+            _log.error(f"Error extracting SoundCloud data from '{query}': {e}")
             return None
 
 

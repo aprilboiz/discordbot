@@ -43,6 +43,12 @@ class Search:
         netloc = parsed_url.netloc
         return netloc.lower() == "open.spotify.com"
 
+    def is_soundcloud_playlist(self, url: str) -> bool:
+        """Check if the URL is a SoundCloud playlist, set, or album."""
+        if not self.is_soundcloud(url):
+            return False
+        return "/sets/" in url or "/albums/" in url or "/playlists/" in url
+
     async def query(
         self,
         query: str,
@@ -74,8 +80,10 @@ class Search:
                     query=query, ctx=ctx, is_search=not self.is_url(query), limit=limit
                 )
             elif provider == "soundcloud":
+                # For SoundCloud, handle playlists properly
+                effective_limit = 0 if (limit == 1 and self.is_soundcloud_playlist(query)) else limit
                 songs = await ExtractorFactory.get_extractor("soundcloud").get_data(
-                    query=query, ctx=ctx, is_search=not self.is_url(query), limit=limit
+                    query=query, ctx=ctx, is_search=not self.is_url(query), limit=effective_limit
                 )
             elif provider == "spotify":
                 songs = await ExtractorFactory.get_extractor("spotify").get_data(
@@ -94,8 +102,17 @@ class Search:
                         query=query, ctx=ctx, is_playlist=is_playlist, limit=limit
                     )
                 elif self.is_soundcloud(query):
+                    # For SoundCloud playlists/sets, use special handling
+                    if self.is_soundcloud_playlist(query):
+                        # If limit is 1, it's likely for first song extraction
+                        # Use 0 (unlimited) for background processing
+                        effective_limit = limit if limit != 1 else 0
+                        _log.debug(f"SoundCloud playlist detected, using limit: {effective_limit}")
+                    else:
+                        effective_limit = limit
+                    
                     songs = await ExtractorFactory.get_extractor("soundcloud").get_data(
-                        query=query, ctx=ctx, limit=limit
+                        query=query, ctx=ctx, limit=effective_limit
                     )
                 elif self.is_spotify(query):
                     songs = await ExtractorFactory.get_extractor("spotify").get_data(

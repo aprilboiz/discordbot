@@ -173,26 +173,69 @@ async def _(song_meta: YouTubeSongMeta) -> Union[Song, None]:
 
 @createSong.register  # type: ignore
 async def _(song_meta: SoundCloudSongMeta) -> Union[Song, None]:
+    """
+    Create a SoundCloud song with enhanced error handling and retry logic.
+    
+    This method includes:
+    - Proper error handling for unavailable tracks
+    - Graceful handling of playback URL failures
+    - Detailed logging for debugging
+    """
     sc_service = SoundCloudService()
 
-    track = sc_service.sc.get_track(song_meta.track_id)
-    if track is None:
-        _logger.error(f"This SoundCloud track is unavailable. ID: {song_meta.track_id}. Title: {song_meta.title}")
-        return None
-    playback_url = await sc_service.get_playback_url(track)
+    try:
+        # Get track information first
+        track = sc_service.sc.get_track(song_meta.track_id)
+        if track is None:
+            _logger.error(f"SoundCloud track not found. ID: {song_meta.track_id}. Title: {song_meta.title}")
+            return None
+        
+        # Validate track has required attributes
+        if not hasattr(track, 'title') or not track.title:
+            _logger.error(f"SoundCloud track missing title. ID: {song_meta.track_id}")
+            return None
+            
+        if not hasattr(track, 'user') or not track.user:
+            _logger.error(f"SoundCloud track missing user info. ID: {song_meta.track_id}")
+            return None
 
-    return Song(
-        title=track.title,
-        playback_url=playback_url,
-        uploader=track.user.username,
-        duration=song_meta.duration,
-        playback_count=format_playback_count(safe_getattr(track, "playback_count", 0)),
-        upload_date=safe_format_date(track.created_at),
-        thumbnail=sc_service.get_thumbnail(track),
-        webpage_url=track.permalink_url,
-        album=Album(song_meta.playlist_name) if song_meta.playlist_name else None,
-        context=song_meta.ctx,
-    )
+        # Try to get playback URL with our enhanced service
+        playback_url = None
+        try:
+            playback_url = await sc_service.get_playback_url(track)
+        except Exception as e:
+            _logger.error(f"Failed to get playback URL for SoundCloud track '{track.title}' (ID: {song_meta.track_id}): {e}")
+        
+        # If playback URL is None or empty, log and return None
+        if not playback_url:
+            _logger.error(f"No valid playback URL found for SoundCloud track '{track.title}' (ID: {song_meta.track_id}). Track may be unavailable, region-restricted, or require premium access.")
+            return None
+        
+        # Get thumbnail safely
+        thumbnail = ""
+        try:
+            thumbnail = sc_service.get_thumbnail(track)
+        except Exception as e:
+            _logger.warning(f"Failed to get thumbnail for SoundCloud track '{track.title}': {e}")
+            thumbnail = ""  # Use empty string as fallback
+
+        # Create and return the song object
+        return Song(
+            title=track.title,
+            playback_url=playback_url,
+            uploader=track.user.username,
+            duration=song_meta.duration,
+            playback_count=format_playback_count(safe_getattr(track, "playback_count", 0)),
+            upload_date=safe_format_date(track.created_at),
+            thumbnail=thumbnail,
+            webpage_url=track.permalink_url,
+            album=Album(song_meta.playlist_name) if song_meta.playlist_name else None,
+            context=song_meta.ctx,
+        )
+        
+    except Exception as e:
+        _logger.error(f"Unexpected error creating SoundCloud song. ID: {song_meta.track_id}. Title: {song_meta.title}. Error: {e}")
+        return None
 
 
 @createSong.register  # type: ignore
