@@ -198,3 +198,20 @@ class Music(commands.Cog):
             await ctx.send(embed=Embed().ok("Switched to the new voice channel!"))
         else:
             await ctx.send(embed=Embed().error("No need to change the voice channel!"))
+
+            
+    @app_commands.command(
+        name="trending", description="Phát một bài nhạc đang trending trên YouTube"
+    )
+    @ensure_voice
+    async def trending(self, interaction: discord.Interaction) -> None:
+        if not interaction.response.is_done():
+            await self.set_reply_timeout(interaction)
+        ctx = await self.bot.get_context(interaction)
+
+        if not await ensure_same_channel(ctx):
+            return
+
+        if interaction.guild_id:
+            audio = get_or_create_audio(self.bot, interaction.guild_id)
+            await audio.process_trending(ctx)

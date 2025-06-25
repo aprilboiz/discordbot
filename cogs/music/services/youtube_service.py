@@ -523,3 +523,68 @@ class YouTubeService:
                 _log.warning(f"Error creating video metadata for {entry.get('id', 'unknown')}: {e}")
         
         return videos 
+
+    async def get_trending_videos(self, category: str = "music", region: str = "VN", limit: int = 10) -> List[YouTubeVideo]:
+        """
+        Get trending videos from YouTube
+        
+        Args:
+            category (str): Category to get trending videos from (default: "music")
+            region (str): Region code for trending (default: "VN" for Vietnam)
+            limit (int): Number of videos to return (default: 10)
+            
+        Returns:
+            List[YouTubeVideo]: List of trending videos
+        """
+        def _get_trending():
+            try:
+                # Configure yt-dlp for trending videos extraction
+                trending_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': True,
+                    'playlist_items': f'1-{limit}',
+                    'socket_timeout': 30,
+                    'retries': 3,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
+                
+                # YouTube trending URL with music category and region
+                # Use music category specifically for music trending
+                trending_url = f"https://www.youtube.com/feed/trending?bp=4gINGgt5dG1hX2NoYXJ0cw%3D%3D&gl={region}"
+                
+                with yt_dlp.YoutubeDL(trending_opts) as ydl:
+                    try:
+                        info = ydl.extract_info(trending_url, download=False)
+                        if info and 'entries' in info:
+                            videos = []
+                            for entry in info['entries']:
+                                if entry and entry.get('id'):
+                                    videos.append(YouTubeVideo(entry))
+                            return videos[:limit]
+                        return []
+                    except Exception as e:
+                        _log.error(f"Error extracting trending videos: {e}")
+                        return []
+                        
+            except Exception as e:
+                _log.error(f"Error in get_trending_videos: {e}")
+                return []
+        
+        return await asyncio.to_thread(_get_trending)
+
+    async def get_trending_music_video(self, region: str = "VN") -> Optional[YouTubeVideo]:
+        """
+        Get a single trending music video
+        
+        Args:
+            region (str): Region code for trending (default: "VN" for Vietnam)
+            
+        Returns:
+            Optional[YouTubeVideo]: A trending music video or None if not found
+        """
+        trending_videos = await self.get_trending_videos(category="music", region=region, limit=5)
+        if trending_videos:
+            # Return the first trending music video
+            return trending_videos[0]
+        return None 
