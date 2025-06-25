@@ -743,3 +743,68 @@ class Audio(PlaylistLoaderProtocol):
             
         except Exception as e:
             _log.error(f"Error handling loading error: {e}")
+
+    async def process_trending(self, ctx: commands.Context) -> None:
+        """Process and play a trending music video from YouTube"""
+        try:
+            # Send initial message
+            await ctx.send(embed=Embed().ok("🎵 Đang tìm bài nhạc trending..."))
+            
+            # Get trending music video
+            from cogs.music.services.youtube_service import YouTubeService
+            youtube_service = YouTubeService()
+            
+            trending_video = await youtube_service.get_trending_music_video(region="VN")
+            
+            if trending_video:
+                # Create YouTubeSongMeta from trending video
+                from cogs.music.core.song import YouTubeSongMeta
+                song_meta = YouTubeSongMeta(
+                    title=trending_video.title,
+                    author=trending_video.author,
+                    duration=self._format_duration(trending_video.length),
+                    video_id=trending_video.video_id,
+                    webpage_url=trending_video.watch_url,
+                    playlist_name="Trending Music",
+                    ctx=ctx
+                )
+                
+                # Use createSong function to create the song
+                from cogs.music.core.song import createSong
+                song = await createSong(song_meta)
+                
+                if song:
+                    # Clear current queue and add trending song
+                    self.playlist_manager.playlist.clear()
+                    await self.playlist_manager.playlist.add(song_meta)
+                    
+                    # Send success message
+                    embed = Embed(ctx).ok(
+                        f"🎵 **Đang phát bài nhạc trending:**\n"
+                        f"**{trending_video.title}**\n"
+                        f"👤 {trending_video.author}\n"
+                        f"⏱️ {self._format_duration(trending_video.length)}"
+                    )
+                    await ctx.send(embed=embed)
+                    
+                    # Start playing
+                    if not self.is_playing:
+                        await self.play_next(ctx)
+                else:
+                    await ctx.send(embed=Embed().error("❌ Không thể tạo bài hát từ video trending."))
+            else:
+                await ctx.send(embed=Embed().error("❌ Không tìm thấy bài nhạc trending nào."))
+                
+        except Exception as e:
+            _log.error(f"Error in process_trending: {e}")
+            await ctx.send(embed=Embed().error("❌ Có lỗi xảy ra khi tìm bài nhạc trending."))
+
+    def _format_duration(self, seconds: int) -> str:
+        """Format duration in seconds to MM:SS format"""
+        if seconds <= 0:
+            return "00:00"
+        # Convert to int to handle float values
+        seconds = int(seconds)
+        minutes = seconds // 60
+        remaining_seconds = seconds % 60
+        return f"{minutes:02d}:{remaining_seconds:02d}"
