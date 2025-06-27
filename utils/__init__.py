@@ -3,9 +3,8 @@ import functools
 import logging
 import logging.handlers
 import os
-from datetime import datetime, timedelta
-import sys
 import shutil
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Literal, Union
 
@@ -26,19 +25,19 @@ def convert_to_second(time: str) -> float:
     """Converts a time string with '%H:%M:%S' or '%M:%S' format to seconds."""
     try:
         # First try the standard HH:MM:SS format
-        parsed_datetime: datetime = datetime.strptime(time, "%H:%M:%S")
-        dt: timedelta = parsed_datetime - datetime(1900, 1, 1)
-        return dt.total_seconds()
+        parsed_datetime_hms: datetime = datetime.strptime(time, "%H:%M:%S")
+        dt_hms: timedelta = parsed_datetime_hms - datetime(1900, 1, 1)
+        return dt_hms.total_seconds()
     except ValueError:
         try:
             # If that fails, try MM:SS format by adding hours
-            parsed_datetime: datetime = datetime.strptime(f"00:{time}", "%H:%M:%S")
-            dt: timedelta = parsed_datetime - datetime(1900, 1, 1)
-            return dt.total_seconds()
+            parsed_datetime_ms: datetime = datetime.strptime(f"00:{time}", "%H:%M:%S")
+            dt_ms: timedelta = parsed_datetime_ms - datetime(1900, 1, 1)
+            return dt_ms.total_seconds()
         except ValueError:
             # If both formats fail, try to parse manually
             try:
-                parts = time.split(':')
+                parts = time.split(":")
                 if len(parts) == 2:  # MM:SS format
                     minutes, seconds = map(int, parts)
                     return minutes * 60 + seconds
@@ -54,8 +53,33 @@ def convert_to_second(time: str) -> float:
 
 
 def convert_to_time(seconds: float) -> str:
-    """Converts seconds to a time string with '%H:%M:%S' format."""
-    return str(timedelta(seconds=seconds))
+    """Converts seconds to a human-readable time string with support for days."""
+    if seconds <= 0:
+        return "0:00"
+
+    # Convert to integers to avoid floating point issues
+    total_seconds = int(seconds)
+
+    # Calculate time components
+    days = total_seconds // 86400  # 86400 seconds in a day
+    remaining_seconds = total_seconds % 86400
+
+    hours = remaining_seconds // 3600  # 3600 seconds in an hour
+    remaining_seconds %= 3600
+
+    minutes = remaining_seconds // 60
+    seconds = remaining_seconds % 60
+
+    # Format based on duration
+    if days > 0:
+        if days == 1:
+            return f"1 day, {hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{days} days, {hours}:{minutes:02d}:{seconds:02d}"
+    elif hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    else:
+        return f"{minutes}:{seconds:02d}"
 
 
 def get_time() -> str:
@@ -155,7 +179,6 @@ def setup_logger(name: str, level=logging.DEBUG):
 
 def cleanup() -> None:
     """Clean garbages after bot end."""
-    import shutil
 
     def remove_dirs(curr_dir="./", del_dirs=["temp_folder", "__pycache__"]):
         for del_dir in del_dirs:

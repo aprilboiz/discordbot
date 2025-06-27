@@ -3,8 +3,8 @@ import functools
 
 import discord
 from cogs.components.discord_embed import Embed
-from cogs.music.controller import Audio, PlayerManager
-from cogs.music.view.view import MusicView
+from cogs.music.controller import PlayerManager
+from cogs.music.view.view import QueueView
 from core.error_handler import ErrorHandler
 from discord import app_commands
 from discord.ext import commands
@@ -123,26 +123,47 @@ class Music(commands.Cog):
         await interaction.response.defer()
         ctx = await self.bot.get_context(interaction)
         if interaction.guild_id and ctx.voice_client:
-            if (
-                self.player_manager.players[
-                    interaction.guild_id
-                ].playlist_manager.playlist.size()
-                == 0
-            ):
+            player = self.player_manager.players[interaction.guild_id]
+            playlist = player.playlist_manager.playlist
+
+            if playlist.size() == 0:
                 await ctx.send(
                     embed=Embed().error(
                         description="There are no songs in the playlist."
                     )
                 )
             else:
-                playlist = await self.player_manager.players[
-                    interaction.guild_id
-                ].playlist_manager.playlist.get_list()
-                view = MusicView(
-                    playlist,
-                    self.player_manager.players[
-                        interaction.guild_id
-                    ].handle_track_selection_in_playlist,
+                # Get queue information
+                queue_list = await playlist.get_list()
+                current_song_obj = player.playlist_manager.current_song
+                current_song_meta = None
+                if current_song_obj:
+                    # Create a simple object with the essential info for display
+                    class CurrentSongDisplay:
+                        def __init__(self, title: str, author: str, duration: str):
+                            self.title = title
+                            self.author = author
+                            self.duration = duration
+
+                    current_song_meta = CurrentSongDisplay(
+                        title=current_song_obj.title,
+                        author=current_song_obj.uploader,
+                        duration=current_song_obj.duration,
+                    )
+
+                priority_count = playlist.priority_size()
+
+                # Calculate total duration
+                total_duration = playlist.time_wait()
+
+                # Create enhanced queue view
+                view = QueueView(
+                    tracks=queue_list,
+                    callback=player.handle_track_selection_in_playlist,
+                    current_song=current_song_meta,
+                    priority_count=priority_count,
+                    total_duration=total_duration,
+                    timeout=180,
                 )
                 view.message = await ctx.send(embed=view.create_embed(), view=view)
         else:
@@ -199,7 +220,6 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=Embed().error("No need to change the voice channel!"))
 
-            
     @app_commands.command(
         name="trending", description="Phát một bài nhạc đang trending trên YouTube"
     )

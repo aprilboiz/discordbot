@@ -28,7 +28,10 @@ class PriorityQueueItem:
     Wrapper for priority queue items to handle priority-based ordering.
     Edge case: Handle priority songs that need to play immediately after current song.
     """
-    def __init__(self, song: SongMeta, priority: int = 0, timestamp: Optional[float] = None):
+
+    def __init__(
+        self, song: SongMeta, priority: int = 0, timestamp: Optional[float] = None
+    ):
         self.song = song
         self.priority = priority  # Lower number = higher priority
         self.timestamp = timestamp or time.time()
@@ -58,7 +61,7 @@ class PlayList(Observable):
         async with self.lock:
             self._q.append(song)
             await self.notify()
-            
+
             # Start background preparation if this is one of the next few songs
             if len(self._q) <= 3:  # Prepare the next 3 songs
                 self._schedule_background_preparation(song)
@@ -73,7 +76,7 @@ class PlayList(Observable):
             priority_item = PriorityQueueItem(song, priority=0)  # Highest priority
             heapq.heappush(self._priority_queue, priority_item)
             await self.notify()
-            
+
             # Immediately start preparing this priority song
             self._schedule_background_preparation(song, high_priority=True)
 
@@ -86,18 +89,21 @@ class PlayList(Observable):
             timestamp = time.time()
             for i, song in enumerate(songs):
                 # Add with incrementing priority to maintain order
-                priority_item = PriorityQueueItem(song, priority=i, timestamp=timestamp + i * 0.001)
+                priority_item = PriorityQueueItem(
+                    song, priority=i, timestamp=timestamp + i * 0.001
+                )
                 heapq.heappush(self._priority_queue, priority_item)
-            
+
             await self.notify()
-            
+
             # Prepare the first few priority songs
             for song in songs[:2]:  # Prepare first 2 priority songs
                 self._schedule_background_preparation(song, high_priority=True)
 
     def index(self, song: SongMeta) -> Optional[int]:
         """
-        Get the index of a song in the queue.
+        Get the index of a song in the combined queue (priority + regular).
+        Priority songs come first in the index order.
 
         Args:
             song (SongMeta): The song to find in the queue.
@@ -105,8 +111,19 @@ class PlayList(Observable):
         Returns:
             int | None: The index of the song if found, otherwise None.
         """
+        # Check priority queue first
+        if self._priority_queue:
+            priority_songs = sorted(self._priority_queue, key=lambda x: (x.priority, x.timestamp))
+            for i, item in enumerate(priority_songs):
+                if item.song == song:
+                    return i
+        
+        # Check regular queue
         try:
-            return self._q.index(song)
+            regular_index = self._q.index(song)
+            # Add the number of priority songs to get the correct combined index
+            priority_count = len(self._priority_queue)
+            return priority_count + regular_index
         except ValueError:
             return None
 
@@ -143,7 +160,7 @@ class PlayList(Observable):
 
     async def remove_by_song(self, song: SongMeta) -> None:
         """
-        Remove a song from the queue.
+        Remove a song from the queue (searches both priority and regular queues).
 
         Args:
             song (SongMeta): The song to remove from the queue.
@@ -152,6 +169,14 @@ class PlayList(Observable):
             None
         """
         async with self.lock:
+            # First try to remove from priority queue
+            for i, item in enumerate(self._priority_queue):
+                if item.song == song:
+                    self._priority_queue.pop(i)
+                    heapq.heapify(self._priority_queue)  # Re-heapify after removal
+                    return
+            
+            # If not found in priority queue, try regular queue
             try:
                 self._q.remove(song)
             except ValueError:
@@ -186,13 +211,13 @@ class PlayList(Observable):
         self._q.clear()
         self._priority_queue.clear()
         self._background_loading = False
-        
+
         # Cancel all background preparation tasks
         for task in self._preparation_tasks.values():
             if not task.done():
                 task.cancel()
         self._preparation_tasks.clear()
-        
+
         # Clear prepared songs cache
         self._prepared_songs.clear()
 
@@ -202,13 +227,15 @@ class PlayList(Observable):
         Useful for when playlists are cleared or interrupted.
         """
         self._background_loading = False
-        
+
         # Cancel active preparation tasks
         for task in list(self._preparation_tasks.values()):
             if not task.done():
                 task.cancel()
-        
-        _logger.info(f"Cancelled {len(self._preparation_tasks)} background loading tasks")
+
+        _logger.info(
+            f"Cancelled {len(self._preparation_tasks)} background loading tasks"
+        )
         self._preparation_tasks.clear()
 
     def is_background_loading(self) -> bool:
@@ -217,56 +244,84 @@ class PlayList(Observable):
 
     def get_background_loading_stats(self) -> dict:
         """Get statistics about background loading"""
-        active_tasks = sum(1 for task in self._preparation_tasks.values() if not task.done())
-        completed_tasks = sum(1 for task in self._preparation_tasks.values() if task.done())
-        
+        active_tasks = sum(
+            1 for task in self._preparation_tasks.values() if not task.done()
+        )
+        completed_tasks = sum(
+            1 for task in self._preparation_tasks.values() if task.done()
+        )
+
         return {
-            'is_loading': self.is_background_loading(),
-            'active_tasks': active_tasks,
-            'completed_tasks': completed_tasks,
-            'prepared_songs': len(self._prepared_songs),
-            'queue_size': self.size()
+            "is_loading": self.is_background_loading(),
+            "active_tasks": active_tasks,
+            "completed_tasks": completed_tasks,
+            "prepared_songs": len(self._prepared_songs),
+            "queue_size": self.size(),
         }
 
     def time_wait(self, to_song_index: int | None = None) -> str:
         """
-        Calculate the total duration of songs in the queue up to a specified index.
+        Calculate the total duration of songs in the combined queue up to a specified index.
+        Priority songs are considered first in the calculation.
+        
         Args:
             to_song_index (int | None): The index up to which the total duration is calculated.
                                         If None, the total duration of all songs in the queue is calculated.
         Returns:
             str: The total duration in a human-readable format (HH:MM:SS).
         """
+        # Get combined queue in playback order
+        combined_songs = []
+        
+        # Add priority songs first (sorted by priority)
+        if self._priority_queue:
+            priority_songs = sorted(self._priority_queue, key=lambda x: (x.priority, x.timestamp))
+            combined_songs.extend([item.song for item in priority_songs])
+        
+        # Add regular queue songs
+        combined_songs.extend(list(self._q))
 
         if to_song_index is None:
-            to_song_index = len(self._q)
+            to_song_index = len(combined_songs)
 
         sec = 0
-        for i in range(to_song_index):
-            sec += convert_to_second(time=self._q[i].duration)
+        for i in range(min(to_song_index, len(combined_songs))):
+            sec += convert_to_second(time=combined_songs[i].duration)
 
         return convert_to_time(seconds=sec)
 
     async def get_list(self, limit: int | None = None) -> List[SongMeta]:
         """
-        Retrieve a list of songs from the playlist.
+        Retrieve a list of songs from the playlist in playback order.
+        Priority songs are returned first, followed by regular queue songs.
+        
         Args:
             limit (int | None, optional): The maximum number of songs to retrieve.
                                           If None, all songs in the playlist are returned. Defaults to None.
         Returns:
             List[SongMeta]: A list of SongMeta objects representing the songs in the playlist.
         """
-
+        # Combine priority queue and regular queue in correct order
+        combined_songs = []
+        
+        # Add priority songs first (sorted by priority)
+        if self._priority_queue:
+            priority_songs = sorted(self._priority_queue, key=lambda x: (x.priority, x.timestamp))
+            combined_songs.extend([item.song for item in priority_songs])
+        
+        # Add regular queue songs
+        combined_songs.extend(list(self._q))
+        
         if limit is None:
-            return [song for song in self._q]
+            return combined_songs
         else:
-            return [song for song in list(self._q)[:limit]]
+            return combined_songs[:limit]
 
     def get_next(self) -> SongMeta | None:
         """
         Retrieves the next song from the playlist with proper priority handling.
         Priority songs always play before regular queue songs.
-        
+
         Returns:
             SongMeta | None: The next song to play, or None if the playlist is empty.
         """
@@ -275,13 +330,13 @@ class PlayList(Observable):
             priority_item = heapq.heappop(self._priority_queue)
             _logger.debug(f"Returning priority song: {priority_item.song.title}")
             return priority_item.song
-        
+
         # Then check regular queue
         if self._q:
             song = self._q.popleft()
             _logger.debug(f"Returning regular queue song: {song.title}")
             return song
-        
+
         return None
 
     async def get_next_prepared(self) -> Song | None:
@@ -294,25 +349,25 @@ class PlayList(Observable):
             return None
 
         song_key = self._get_song_key(song_meta)
-        
+
         # Check if song is already prepared
         if song_key in self._prepared_songs:
             prepared_song = self._prepared_songs.pop(song_key)
             _logger.debug(f"Using pre-prepared song: {song_meta.title}")
-            
+
             # Trigger preparation of the next few songs
             self._prepare_upcoming_songs()
-            
+
             return prepared_song
 
         # Song not prepared yet, prepare it now
         _logger.debug(f"Preparing song on-demand: {song_meta.title}")
         song_obj = await createSong(song_meta)
-        
+
         if song_obj is None:
             # Edge case: Handle song creation failure and retry with next song
             await self._handle_song_creation_failure(song_meta)
-            
+
             if self.size() > 0:
                 return await self.get_next_prepared()
             else:
@@ -320,7 +375,7 @@ class PlayList(Observable):
 
         # Trigger preparation of upcoming songs
         self._prepare_upcoming_songs()
-        
+
         return song_obj
 
     async def _handle_song_creation_failure(self, song_meta: SongMeta) -> None:
@@ -330,7 +385,7 @@ class PlayList(Observable):
         """
         id_info = None
         reason = "Unknown error"
-        
+
         if isinstance(song_meta, YouTubeSongMeta):
             id_info = song_meta.video_id
             reason = f"The requested YouTube song '{song_meta.title}' may not be available, age-restricted, or region-blocked"
@@ -341,7 +396,7 @@ class PlayList(Observable):
         _logger.error(
             f"Failed to create song with type: {type(song_meta)}. Title: {song_meta.title}. ID: {id_info}. Reason: {reason}"
         )
-        
+
         # For SoundCloud failures, add a small delay to avoid rapid retry cycles
         if isinstance(song_meta, SoundCloudSongMeta):
             await asyncio.sleep(0.5)
@@ -353,54 +408,60 @@ class PlayList(Observable):
         """
         try:
             songs_to_prepare = []
-            
+
             # Prepare priority songs first
             for item in self._priority_queue[:2]:  # First 2 priority songs
                 songs_to_prepare.append(item.song)
-            
+
             # Then prepare regular queue songs
             for song in list(self._q)[:3]:  # First 3 regular songs
                 songs_to_prepare.append(song)
-            
+
             # Schedule preparation for selected songs
             for song in songs_to_prepare:
                 self._schedule_background_preparation(song)
-                
+
         except Exception as e:
             _logger.error(f"Error scheduling upcoming song preparation: {e}")
 
-    def _schedule_background_preparation(self, song: SongMeta, high_priority: bool = False) -> None:
+    def _schedule_background_preparation(
+        self, song: SongMeta, high_priority: bool = False
+    ) -> None:
         """
         Schedule background preparation of a song to reduce playback latency.
         Edge case: Prevent overwhelming the system with too many concurrent preparations.
         """
         song_key = self._get_song_key(song)
-        
+
         # Don't prepare if already prepared or being prepared
         if song_key in self._prepared_songs or song_key in self._preparation_tasks:
             return
-        
+
         # Limit concurrent preparation tasks to prevent resource exhaustion
-        active_tasks = sum(1 for task in self._preparation_tasks.values() if not task.done())
+        active_tasks = sum(
+            1 for task in self._preparation_tasks.values() if not task.done()
+        )
         if not high_priority and active_tasks >= 5:  # Max 5 concurrent preparations
             return
-            
+
         # Create background task for song preparation
         task = asyncio.create_task(self._prepare_song_background(song, high_priority))
         self._preparation_tasks[song_key] = task
 
-    async def _prepare_song_background(self, song: SongMeta, high_priority: bool = False) -> None:
+    async def _prepare_song_background(
+        self, song: SongMeta, high_priority: bool = False
+    ) -> None:
         """
         Background task to prepare a song for playback.
         Edge case: Handle preparation failures and resource management.
         """
         song_key = self._get_song_key(song)
-        
+
         try:
             if not high_priority:
                 # Add a small delay for non-priority songs to not overwhelm the system
                 await asyncio.sleep(1.0)
-            
+
             prepared_song = await createSong(song)
             if prepared_song:
                 async with self.lock:
@@ -409,10 +470,14 @@ class PlayList(Observable):
                         self._prepared_songs[song_key] = prepared_song
                         _logger.debug(f"Background prepared song: {song.title}")
                     else:
-                        _logger.debug(f"Cache full, skipping preparation for: {song.title}")
-            
+                        _logger.debug(
+                            f"Cache full, skipping preparation for: {song.title}"
+                        )
+
         except Exception as e:
-            _logger.error(f"Failed to prepare song in background: {song.title}, Error: {e}")
+            _logger.error(
+                f"Failed to prepare song in background: {song.title}, Error: {e}"
+            )
         finally:
             # Clean up the task reference
             if song_key in self._preparation_tasks:
