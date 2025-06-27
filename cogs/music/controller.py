@@ -39,6 +39,8 @@ class Audio(PlaylistLoaderProtocol):
         # Initialize optimized playlist loader
         self.background_loader = BackgroundPlaylistLoader(callback=self, batch_size=8)
         self._loading_message: Optional[discord.Message] = None
+        # Track priority setting for background loading
+        self._current_priority: bool = False
 
         for arg in args:
             if (
@@ -190,6 +192,8 @@ class Audio(PlaylistLoaderProtocol):
     ) -> None:
         # assign this context for timeout_handler can work.
         self.ctx = ctx
+        # Track priority setting for background loading
+        self._current_priority = priority
 
         start_time = time.time()
         
@@ -653,11 +657,11 @@ class Audio(PlaylistLoaderProtocol):
             if not self.ctx or not result.first_song:
                 return
             
-            # Add the first song to the queue with priority
-            await self.playlist_manager.add_songs([result.first_song], priority=False)
+            # Add the first song to the queue with the original priority setting
+            await self.playlist_manager.add_songs([result.first_song], priority=self._current_priority)
             
             # Send first song added message
-            await self._send_song_added_message(result.first_song, priority=False)
+            await self._send_song_added_message(result.first_song, priority=self._current_priority)
             
             # If there are more songs expected, show loading message
             if result.total_expected > 1:
@@ -677,8 +681,8 @@ class Audio(PlaylistLoaderProtocol):
             if not self.ctx:
                 return
             
-            # Add the batch to the playlist
-            await self.playlist_manager.add_songs(songs, priority=False)
+            # Add the batch to the playlist with the original priority setting
+            await self.playlist_manager.add_songs(songs, priority=self._current_priority)
             
             # Update loading message every few batches for large playlists
             if progress.current_batch % 3 == 0 and self._loading_message:
@@ -726,6 +730,9 @@ class Audio(PlaylistLoaderProtocol):
                 finally:
                     self._loading_message = None
             
+            # Reset priority flag after loading is complete
+            self._current_priority = False
+            
         except Exception as e:
             _log.error(f"Error handling loading complete: {e}")
 
@@ -740,6 +747,9 @@ class Audio(PlaylistLoaderProtocol):
                 error_msg += "\nYou can try again or use a different playlist."
             
             await self.ctx.send(embed=Embed().error(error_msg), delete_after=15)
+            
+            # Reset priority flag after error
+            self._current_priority = False
             
         except Exception as e:
             _log.error(f"Error handling loading error: {e}")
