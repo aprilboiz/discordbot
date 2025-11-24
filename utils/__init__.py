@@ -208,8 +208,12 @@ class Timer:
         self.__task = asyncio.create_task(self.__job())
 
     async def __job(self) -> None:
-        await asyncio.sleep(constants.VOICE_TIMEOUT)
-        await self.__callback(self.ctx)
+        try:
+            await asyncio.sleep(constants.VOICE_TIMEOUT)
+            await self.__callback(self.ctx)
+        except asyncio.CancelledError:
+            pass  # Task was cancelled
 
     def cancel(self) -> None:
-        self.__task.cancel()
+        if not self.__task.done():
+            self.__task.cancel()

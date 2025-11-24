@@ -5,11 +5,10 @@ import discord
 from cogs.components.discord_embed import Embed
 from cogs.music.core.playlist import PlayList
 from discord.ext import commands
-from patterns.singleton import SingletonMeta
 from utils import convert_to_second, convert_to_time, get_time
 
 if TYPE_CHECKING:
-    from cogs.music.controller import Audio
+    from cogs.music.controller import GuildMusicManager
     from cogs.music.core.song import Song, SongMeta
 
 
@@ -50,14 +49,17 @@ class PlaylistManager:
         return None
 
 
-class PlayerManager(metaclass=SingletonMeta):
+class PlayerManager:
     """
     A class that manages the players for the music controller.
 
     Attributes:
-        players (dict[int, Audio]): A dictionary that stores the players, where the key is the guild ID
-        and the value is an instance of the Audio class.
+        players (dict[int, GuildMusicManager]): A dictionary that stores the players, where the key is the guild ID
+        and the value is an instance of the GuildMusicManager class.
     """
 
     def __init__(self) -> None:
-        self.players: dict[int, Audio] = {}
+        self.players: dict[int, 'GuildMusicManager'] = {}
+
+    def get_player(self, guild_id: int) -> Optional['GuildMusicManager']:
+        return self.players.get(guild_id)

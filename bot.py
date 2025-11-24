@@ -21,6 +21,7 @@ class Bot(commands.Bot):
         intents: discord.Intents = discord.Intents.default()
         intents.message_content = True
         self.error_handler = ErrorHandler(self)
+        self.player_manager = PlayerManager()
         super().__init__(command_prefix="?", intents=intents)
 
     async def setup_hook(self) -> None:
@@ -53,7 +54,7 @@ async def init_bot() -> None:
         token = get_env(key="TOKEN")
         if token is None:
             raise ValueError("Cannot find token in env.")
-        await bot.add_cog(Music(bot, PlayerManager(), ErrorHandler(bot)))
+        await bot.add_cog(Music(bot, bot.player_manager, ErrorHandler(bot)))
         await bot.add_cog(Greeting(bot))
         await bot.add_cog(TTS(bot))
         await bot.add_cog(Admin(bot))

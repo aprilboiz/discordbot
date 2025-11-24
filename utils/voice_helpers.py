@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from cogs.music.controller import Audio, PlayerManager
+from cogs.music.controller import GuildMusicManager
 
 async def ensure_same_channel(ctx: commands.Context) -> bool:
     """
@@ -21,18 +21,18 @@ async def ensure_same_channel(ctx: commands.Context) -> bool:
         return False
     return True
 
-def get_or_create_audio(bot: commands.Bot, guild_id: int) -> Audio:
+def get_or_create_audio(bot: commands.Bot, guild_id: int) -> GuildMusicManager:
     """
-    Gets an existing Audio instance for the guild or creates a new one.
+    Gets an existing GuildMusicManager instance for the guild or creates a new one.
     
     Args:
         bot (commands.Bot): The bot instance.
         guild_id (int): The ID of the guild.
     
     Returns:
-        Audio: The Audio instance for the guild.
+        GuildMusicManager: The GuildMusicManager instance for the guild.
     """
-    player_manager = PlayerManager()
+    player_manager = bot.player_manager
     if guild_id not in player_manager.players:
-        player_manager.players[guild_id] = Audio(bot)
+        player_manager.players[guild_id] = GuildMusicManager(bot, guild_id)
     return player_manager.players[guild_id]
