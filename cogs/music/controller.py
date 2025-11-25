@@ -32,7 +32,7 @@ class GuildMusicManager(PlaylistLoaderProtocol):
     def __init__(self, bot: commands.Bot, guild_id: int) -> None:
         self.bot = bot
         self.guild_id = guild_id
-        self.playlist_manager = PlaylistManager()
+        self.playlist_manager = PlaylistManager(bot.settings_manager, guild_id)
         self.music_player = MusicPlayer(bot, guild_id, self.playlist_manager)
 
         self.ctx: Optional[commands.Context] = None

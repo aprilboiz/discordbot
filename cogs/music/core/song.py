@@ -66,7 +66,7 @@ class Song:
         return song
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class SongMeta:
     """
     Represents a song metadata, contains data used for extract a song's information.
@@ -80,6 +80,11 @@ class SongMeta:
     author: Optional[str]
     ctx: commands.Context
 
+    # Lazy Loading Flag
+    # If False, the song is not yet fully resolved (e.g. playback_url is missing)
+    # createSong will resolve it just-in-time.
+    resolved: bool = False
+
     def update_meta(self, *args, **kwargs) -> None:
         """This method updates the metadata of the song with the given video information.
         The following attributes will be updated:
@@ -91,7 +96,7 @@ class SongMeta:
         raise NotImplementedError("This method must be implemented in a subclass.")
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class YouTubeSongMeta(SongMeta):
     """
     Represents a song metadata for YouTube, contains data used for extract a song's information.
@@ -107,7 +112,7 @@ class YouTubeSongMeta(SongMeta):
         self.author = video.author
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class SoundCloudSongMeta(SongMeta):
     """
     Represents a song metadata for SoundCloud, contains data used for extract a song's information.
@@ -123,7 +128,7 @@ class SoundCloudSongMeta(SongMeta):
         self.author = track.user.username
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class SpotifySongMeta(SongMeta):
     """
     Represents a song metadata for Spotify, contains data used for extract a song's information.
@@ -304,8 +309,18 @@ async def get_songs_info(songs_need_to_update: List[SongMeta]) -> List[SongMeta]
             sp_songs.append(song)
 
     # Get YouTube info
+    # Optimize: Don't resolve stream URL here. Use simple video info if possible.
+    # However, get_video_info in YouTubeService resolves it.
+    # We should use batch_get_video_info if possible or ensure we don't block.
+    # But for lazy loading, we assume metadata is mostly there.
+    # If title is missing, we fetch it.
+
     youtube_service = YouTubeService()
     for song in yt_songs:
+        # We construct a dummy object if we just want to update meta without resolving URL
+        # But update_meta expects a YouTubeVideo object.
+        # If we really need to update meta (title is None), we have to fetch info.
+        # We accept this cost for individual songs added without title.
         video = await youtube_service.get_video_info(f"https://www.youtube.com/watch?v={song.video_id}")
         song.update_meta(video)
 

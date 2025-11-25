@@ -13,14 +13,44 @@ if TYPE_CHECKING:
 
 
 class PlaylistManager:
-    def __init__(self):
+    def __init__(self, settings_manager=None, guild_id: int = None):
         self.playlist: PlayList = PlayList()
         self.current_song: Optional[Song] = None
         self.prev_song: Optional[Song] = None
         self.current_song_start_time: float = 0
         self.current_song_duration: float = 0
+        self.settings_manager = settings_manager
+        self.guild_id = guild_id
 
     async def add_songs(self, songs: List['SongMeta'], priority: bool = False) -> None:
+        if self.settings_manager and self.guild_id:
+            max_queue_size = self.settings_manager.get(self.guild_id, "max_queue_size")
+            max_duration = self.settings_manager.get(self.guild_id, "max_track_duration")
+
+            current_size = self.playlist.size()
+
+            # Filter by duration
+            valid_songs = []
+            for song in songs:
+                # Convert duration string to seconds
+                duration_sec = convert_to_second(song.duration)
+                if duration_sec > max_duration:
+                    continue
+                valid_songs.append(song)
+
+            # Check queue limit
+            if current_size + len(valid_songs) > max_queue_size:
+                # Only add up to limit
+                remaining_slots = max_queue_size - current_size
+                if remaining_slots <= 0:
+                    return # Queue full
+                valid_songs = valid_songs[:remaining_slots]
+
+            songs = valid_songs
+
+        if not songs:
+            return
+
         add_method = self.playlist.add_next if priority else self.playlist.add
         await asyncio.gather(*(add_method(song) for song in songs))
         self.playlist.trigger_update_all_song_meta()

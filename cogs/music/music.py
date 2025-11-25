@@ -16,13 +16,14 @@ from typing import Literal, Optional
 def ensure_voice(f):
     @functools.wraps(f)
     async def callback(self, interaction: discord.Interaction, *args, **kwargs) -> None:
-        await interaction.response.defer(thinking=True)
+        if not interaction.response.is_done():
+             await interaction.response.defer(thinking=True)
         ctx = await self.bot.get_context(interaction)
         if ctx.voice_client is None:
             if ctx.author.voice:
                 await ctx.author.voice.channel.connect(self_deaf=True)
             else:
-                await ctx.send(
+                await interaction.followup.send(
                     "You are not connected to a voice channel.", ephemeral=True
                 )
                 return
@@ -64,6 +65,56 @@ class Music(commands.Cog):
             else:
                 await self.bot.on_command_error(ctx, commands.CommandError(str(error)))
 
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        # Ignore if no change in channel
+        if before.channel == after.channel:
+            return
+
+        guild_id = member.guild.id
+
+        # Handle Bot Disconnection/Movement
+        if member.id == self.bot.user.id:
+            if after.channel is None:
+                # Bot disconnected
+                if guild_id in self.player_manager.players:
+                    self.player_manager.players[guild_id].destroy()
+                    del self.player_manager.players[guild_id]
+            elif before.channel is not None and after.channel != before.channel:
+                # Bot moved - discord.py handles the voice connection move
+                # We might need to check if we should pause? Usually no.
+                pass
+            return
+
+        # Handle User Disconnection/Movement (AFK Logic)
+        # Check the channel where the bot is
+        player = self.player_manager.players.get(guild_id)
+        if not player or not player.ctx or not player.ctx.voice_client:
+            return
+
+        bot_channel = player.ctx.voice_client.channel
+
+        # If the user left the bot's channel
+        if before.channel == bot_channel:
+            # Check if bot is alone
+            if len(bot_channel.members) == 1: # Only bot
+                # Start AFK timer via MusicPlayer (or GuildMusicManager)
+                # GuildMusicManager doesn't expose timer directly, but MusicPlayer does.
+                # player is GuildMusicManager.
+                # We can call a method on GuildMusicManager to signal "empty channel"
+                # Currently GuildMusicManager has no specific method, but we can access music_player
+                player.music_player.on_channel_empty()
+
+        # If a user joined the bot's channel
+        if after.channel == bot_channel:
+            # Cancel AFK timer
+            player.music_player.on_channel_filled()
+
     @app_commands.command(
         name="search", description="Search for a song and play add it to the queue."
     )
@@ -74,8 +125,6 @@ class Music(commands.Cog):
         query: str,
         provider: Optional[Literal["youtube", "soundcloud", "spotify"]] = "youtube",
     ) -> None:
-        if not interaction.response.is_done():
-            await self.set_reply_timeout(interaction)
         ctx = await self.bot.get_context(interaction)
 
         if not await ensure_same_channel(ctx):
@@ -90,8 +139,6 @@ class Music(commands.Cog):
     )
     @ensure_voice
     async def p(self, interaction: discord.Interaction, query: str) -> None:
-        if not interaction.response.is_done():
-            await self.set_reply_timeout(interaction)
         ctx = await self.bot.get_context(interaction)
 
         if not await ensure_same_channel(ctx):
@@ -107,8 +154,6 @@ class Music(commands.Cog):
     )
     @ensure_voice
     async def pn(self, interaction: discord.Interaction, query: str) -> None:
-        if not interaction.response.is_done():
-            await self.set_reply_timeout(interaction)
         ctx = await self.bot.get_context(interaction)
 
         if not await ensure_same_channel(ctx):
@@ -225,8 +270,6 @@ class Music(commands.Cog):
     )
     @ensure_voice
     async def trending(self, interaction: discord.Interaction) -> None:
-        if not interaction.response.is_done():
-            await self.set_reply_timeout(interaction)
         ctx = await self.bot.get_context(interaction)
 
         if not await ensure_same_channel(ctx):

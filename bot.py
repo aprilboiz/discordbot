@@ -6,11 +6,13 @@ import discord
 from discord.ext import commands
 
 from cogs.admin.admin import Admin
+from cogs.admin.config import Config
 from cogs.greetings import Greeting
 from cogs.music.manager import PlayerManager
 from cogs.music.music import Music
 from cogs.tts.tts import TTS
 from core.error_handler import ErrorHandler
+from core.settings_manager import SettingsManager
 from utils import cleanup, get_env, setup_logger
 
 _log = logging.getLogger(name=__name__)
@@ -21,8 +23,10 @@ class Bot(commands.Bot):
         intents: discord.Intents = discord.Intents.default()
         intents.message_content = True
         self.error_handler = ErrorHandler(self)
+        self.settings_manager = SettingsManager()
         self.player_manager = PlayerManager()
-        super().__init__(command_prefix="?", intents=intents)
+        # Remove command_prefix to enforce slash commands
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
 
     async def setup_hook(self) -> None:
         self.tree.error(self.error_handler.handle_interaction_error)
@@ -58,6 +62,7 @@ async def init_bot() -> None:
         await bot.add_cog(Greeting(bot))
         await bot.add_cog(TTS(bot))
         await bot.add_cog(Admin(bot))
+        await bot.add_cog(Config(bot, bot.settings_manager))
         await bot.start(token=token)
 
 

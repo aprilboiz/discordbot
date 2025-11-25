@@ -202,14 +202,15 @@ class Timer:
     """Auto execute a task when the time is out.
     This designed for auto disconnect feature."""
 
-    def __init__(self, callback, ctx) -> None:
+    def __init__(self, callback, ctx, timeout: float = None) -> None:
         self.__callback = callback
         self.ctx = ctx
+        self.timeout = timeout if timeout is not None else constants.VOICE_TIMEOUT
         self.__task = asyncio.create_task(self.__job())
 
     async def __job(self) -> None:
         try:
-            await asyncio.sleep(constants.VOICE_TIMEOUT)
+            await asyncio.sleep(self.timeout)
             await self.__callback(self.ctx)
         except asyncio.CancelledError:
             pass  # Task was cancelled

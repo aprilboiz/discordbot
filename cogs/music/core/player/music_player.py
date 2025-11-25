@@ -19,6 +19,7 @@ class MusicPlayer:
         self.is_playing = False
         self.timer: Optional[Timer] = None
         self.lock = asyncio.Lock()
+        self.paused_due_to_afk = False
 
     def destroy(self):
         if self.timer:
@@ -93,7 +94,10 @@ class MusicPlayer:
             _log.error(f"Error playing song '{song.title}': {e}")
             self.after_play(self.bot, ctx)
 
-    def after_play(self, bot, ctx) -> None:
+    def after_play(self, bot, ctx, error: Optional[Exception] = None) -> None:
+        if error:
+            _log.error(f"Error in playback: {error}")
+
         try:
             # Check if voice client is still playing (it shouldn't be if this callback is called)
             # But we might want to be double sure or handle manual stops
@@ -111,11 +115,35 @@ class MusicPlayer:
             if ctx:
                 self._start_disconnect_timer(ctx)
 
-    def _start_disconnect_timer(self, ctx: Optional[discord.ext.commands.Context]):
+    def on_channel_empty(self):
+        """Called when the bot is left alone in the voice channel."""
+        if self.playlist_manager.current_song and self.playlist_manager.current_song.context:
+             ctx = self.playlist_manager.current_song.context
+             self._start_disconnect_timer(ctx, timeout_seconds=60) # 1 minute timeout for AFK
+             if self.is_playing and ctx.voice_client:
+                 ctx.voice_client.pause()
+                 self.is_playing = False
+                 self.paused_due_to_afk = True
+
+    def on_channel_filled(self):
+        """Called when a user joins the bot's channel."""
+        if self.timer:
+            self.timer.cancel()
+
+        # Resume if paused due to AFK
+        if self.paused_due_to_afk and self.playlist_manager.current_song and self.playlist_manager.current_song.context:
+            ctx = self.playlist_manager.current_song.context
+            if ctx.voice_client and ctx.voice_client.is_paused():
+                ctx.voice_client.resume()
+                self.is_playing = True
+                self.paused_due_to_afk = False
+
+    def _start_disconnect_timer(self, ctx: Optional[discord.ext.commands.Context], timeout_seconds: Optional[float] = None):
         if ctx and not self.is_playing:
             if self.timer:
                 self.timer.cancel()
-            self.timer = Timer(callback=self.timeout_handle, ctx=ctx)
+
+            self.timer = Timer(callback=self.timeout_handle, ctx=ctx, timeout=timeout_seconds)
 
     async def timeout_handle(self, ctx: Optional[discord.ext.commands.Context]) -> None:
         if ctx is None:
