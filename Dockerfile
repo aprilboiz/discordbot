@@ -9,8 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --upgrade pip
 
+# Copy only requirements files first to leverage caching
 COPY pyproject.toml uv.lock ./
 
+# Install dependencies into /install prefix
+# We use the fact that pip can install from pyproject.toml directly
 RUN pip install --no-cache-dir --prefix=/install .
 
 # Stage 2: Runtime environment
@@ -30,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=python-builder /install /usr/local
 
 # Copy application code
+# This is done LAST so that changes to code don't invalidate the dependency install layer
 COPY . .
 
 # Set the default command

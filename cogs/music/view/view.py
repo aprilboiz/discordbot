@@ -1,14 +1,12 @@
 import discord
-from typing import List, Callable, Optional, override
+from typing import List, Callable, Optional, override, Union
 from datetime import datetime
-
-from cogs.music.core.song import SongMeta
-
+import wavelink
 
 class MusicView(discord.ui.View):
     """View for displaying search results"""
 
-    def __init__(self, tracks: List[SongMeta], callback: Callable, timeout: int = 60):
+    def __init__(self, tracks: List[Union[wavelink.Playable]], callback: Callable, timeout: int = 60):
         super().__init__(timeout=timeout)
         self.tracks = tracks
         self.callback = callback
@@ -140,7 +138,7 @@ class QueueView(discord.ui.View):
 
     def __init__(
         self,
-        tracks: List[SongMeta],
+        tracks: List[Union[wavelink.Playable]],
         callback: Callable,
         current_song: Optional[object] = None,
         priority_count: int = 0,
