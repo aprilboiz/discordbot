@@ -15,10 +15,12 @@ _log = logging.getLogger(__name__)
 
 class SoundCloudService(metaclass=SingletonMeta):
     def __init__(self) -> None:
-        self.sc = SoundCloud()
-        self.client_id = self.sc.client_id
+        # Lazy initialization - don't create SoundCloud() until first use
+        self.sc: Optional[SoundCloud] = None
+        self.client_id: Optional[str] = None
         self._last_client_id_refresh = time.time()
         self._client_id_refresh_interval = 3600  # Refresh client_id every hour
+        self._initialization_error: Optional[Exception] = None
         
         # Custom headers to avoid SoundCloud restrictions
         self._custom_headers = {
@@ -30,6 +32,44 @@ class SoundCloudService(metaclass=SingletonMeta):
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         }
+    
+    def _ensure_initialized(self) -> None:
+        """
+        Lazy initialization of SoundCloud client.
+        Only initializes when actually needed, with proper error handling.
+        """
+        if self.sc is not None:
+            return
+        
+        if self._initialization_error is not None:
+            # If we've already tried and failed, raise the cached error
+            raise self._initialization_error
+        
+        try:
+            _log.debug("Initializing SoundCloud client (lazy initialization)")
+            self.sc = SoundCloud()
+            self.client_id = self.sc.client_id
+            self._last_client_id_refresh = time.time()
+            _log.info("SoundCloud client initialized successfully")
+        except requests.exceptions.HTTPError as e:
+            if e.response and e.response.status_code == 403:
+                error_msg = (
+                    "SoundCloud is blocking automated requests (403 Forbidden). "
+                    "This may be due to anti-scraping measures. "
+                    "SoundCloud features will be unavailable until this is resolved."
+                )
+                _log.error(error_msg)
+                self._initialization_error = RuntimeError(error_msg)
+                raise self._initialization_error
+            else:
+                _log.error(f"HTTP error initializing SoundCloud client: {e}")
+                self._initialization_error = e
+                raise
+        except Exception as e:
+            error_msg = f"Failed to initialize SoundCloud client: {e}"
+            _log.error(error_msg)
+            self._initialization_error = RuntimeError(error_msg)
+            raise self._initialization_error
 
     def _refresh_client_id_if_needed(self) -> None:
         """Refresh client_id if it's been too long since last refresh."""
@@ -41,12 +81,24 @@ class SoundCloudService(metaclass=SingletonMeta):
                 self.sc = new_sc
                 self.client_id = new_sc.client_id
                 self._last_client_id_refresh = current_time
+                # Clear any previous initialization errors on successful refresh
+                self._initialization_error = None
                 _log.info("Refreshed SoundCloud client_id")
+            except requests.exceptions.HTTPError as e:
+                if e.response and e.response.status_code == 403:
+                    _log.warning("SoundCloud is blocking client_id refresh (403 Forbidden)")
+                    # Don't update the error if we already have one
+                    if self._initialization_error is None:
+                        self._initialization_error = RuntimeError("SoundCloud is blocking automated requests")
+                else:
+                    _log.warning(f"Failed to refresh client_id: {e}")
             except Exception as e:
                 _log.warning(f"Failed to refresh client_id: {e}")
 
     @to_thread
     def search(self, query: str):
+        self._ensure_initialized()
+        assert self.sc is not None, "SoundCloud client should be initialized"
         _log.debug(f"Searching for: '{query}'")
         return self.sc.search(query)
 
@@ -55,6 +107,8 @@ class SoundCloudService(metaclass=SingletonMeta):
         """
         Resolve SoundCloud URL with enhanced error handling and user-agent spoofing.
         """
+        self._ensure_initialized()
+        assert self.sc is not None, "SoundCloud client should be initialized"
         try:
             _log.debug(f"Resolving SoundCloud URL: '{url}'")
             
@@ -68,6 +122,7 @@ class SoundCloudService(metaclass=SingletonMeta):
             # Try with fresh client_id
             try:
                 self._refresh_client_id_if_needed()
+                assert self.sc is not None, "SoundCloud client should be initialized after refresh"
                 r = self.sc.resolve(url)
                 _log.debug(f"Resolved URL with fresh client_id: '{url}'. Type: {type(r)}")
                 return r
@@ -166,6 +221,8 @@ class SoundCloudService(metaclass=SingletonMeta):
     def _try_original_file_url(self, transcodings, track_authorization: str, track: Union[Track, BasicTrack]) -> Optional[str]:
         """Try to get the original file URL if available."""
         try:
+            self._ensure_initialized()
+            assert self.sc is not None and self.client_id is not None, "SoundCloud client should be initialized"
             # Check if track has downloadable attribute and it's available
             if hasattr(track, 'downloadable') and getattr(track, 'downloadable', False):
                 download_url = getattr(track, 'download_url', None)
@@ -192,6 +249,8 @@ class SoundCloudService(metaclass=SingletonMeta):
         """
         Get stream URL from a specific transcoding with retry logic and client_id rotation.
         """
+        self._ensure_initialized()
+        assert self.sc is not None and self.client_id is not None, "SoundCloud client should be initialized"
         max_retries = 2
         
         for attempt in range(max_retries):
@@ -199,6 +258,7 @@ class SoundCloudService(metaclass=SingletonMeta):
                 # Refresh client_id if needed
                 if attempt > 0:
                     self._refresh_client_id_if_needed()
+                    assert self.sc is not None and self.client_id is not None, "SoundCloud client should be initialized after refresh"
                 
                 params = {
                     "client_id": self.client_id,
@@ -243,6 +303,8 @@ class SoundCloudService(metaclass=SingletonMeta):
     @to_thread
     def __get_tracks(self, track_ids: list[int]) -> List[BasicTrack]:
         """Get tracks from track IDs. Maximum 50 tracks per request."""
+        self._ensure_initialized()
+        assert self.sc is not None, "SoundCloud client should be initialized"
         return self.sc.get_tracks(track_ids)
 
     async def get_tracks_info(self, track_ids: list[int], **kwargs) -> List[BasicTrack]:
@@ -253,7 +315,7 @@ class SoundCloudService(metaclass=SingletonMeta):
             for i in range(0, len(track_ids), MAX_TRACKS_PER_REQUEST)
         ]
         tracks = []
-        r = await asyncio.gather(*[self.__get_tracks(chunk) for chunk in chunks])
+        r = await asyncio.gather(*[self.__get_tracks(chunk) for chunk in chunks])  # type: ignore
         for res in r:
             tracks.extend(res)
         return tracks
@@ -263,7 +325,7 @@ class SoundCloudService(metaclass=SingletonMeta):
         Extract song(s) from SoundCloud URL with enhanced playlist/set support.
         """
         try:
-            resolve = await self.resolve_url(url)
+            resolve = await self.resolve_url(url)  # type: ignore
             if resolve is None or not isinstance(resolve, (AlbumPlaylist, Track)):
                 if resolve is None:
                     error = f"Cannot resolve the SoundCloud URL: '{url}'. This may be due to privacy restrictions, region blocking, or the content may no longer be available."

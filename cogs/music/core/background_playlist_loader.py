@@ -209,7 +209,15 @@ class SoundCloudPlaylistExtractor(BasePlaylistExtractor):
     """SoundCloud-specific playlist extractor"""
     
     def __init__(self):
-        self.soundcloud_service = SoundCloudService()
+        # Lazy initialization - only create service when actually needed
+        self._soundcloud_service: Optional[SoundCloudService] = None
+    
+    @property
+    def soundcloud_service(self) -> SoundCloudService:
+        """Lazy property to get SoundCloudService, initializing it only when needed."""
+        if self._soundcloud_service is None:
+            self._soundcloud_service = SoundCloudService()
+        return self._soundcloud_service
     
     async def extract_first_item(self, url: str, ctx: commands.Context) -> Optional[SongMeta]:
         """Extract first SoundCloud track for immediate playback"""
