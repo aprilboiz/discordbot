@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import urllib.parse
 from typing import Dict, List, Optional, Union, Any
 import yt_dlp
 from utils import to_thread
@@ -15,6 +16,16 @@ class YouTubeDLError(Exception):
 
 class VideoUnavailable(YouTubeDLError):
     """Exception raised when a video is unavailable"""
+    pass
+
+
+class YouTubeAgeRestricted(YouTubeDLError):
+    """Exception raised when a video is age-restricted"""
+    pass
+
+
+class YouTubeMusicOnly(YouTubeDLError):
+    """Exception raised when video is only available on YouTube Music"""
     pass
 
 
@@ -182,8 +193,12 @@ class YouTubeService:
             # Extractor specific options
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],  # Use multiple clients for reliability
-                    'player_skip': ['webpage'],  # Skip webpage parsing for speed
+                    # tv: latest yt-dlp default, most stable (doesn't require PO token)
+                    # android: widely compatible
+                    # web: full formats (may need PO token)
+                    # web_embedded: works for some age-restricted without auth
+                    'player_client': ['tv', 'android', 'web', 'web_embedded'],
+                    'player_skip': ['webpage'],
                 }
             },
         }
@@ -257,7 +272,17 @@ class YouTubeService:
                 error_msg = str(e).lower()
                 if any(keyword in error_msg for keyword in ['unavailable', 'private', 'deleted', 'removed']):
                     raise VideoUnavailable(str(e))
+                if 'age' in error_msg and ('restricted' in error_msg or 'confirm' in error_msg):
+                    raise YouTubeAgeRestricted(str(e))
+                if 'music' in error_msg and 'only' in error_msg:
+                    raise YouTubeMusicOnly(str(e))
                 raise YouTubeDLError(f"Error extracting video info: {e}")
+            except YouTubeAgeRestricted:
+                raise
+            except YouTubeMusicOnly:
+                raise
+            except VideoUnavailable:
+                raise
             except Exception as e:
                 raise YouTubeDLError(f"Unexpected error: {e}")
         
@@ -587,4 +612,32 @@ class YouTubeService:
         if trending_videos:
             # Return the first trending music video
             return trending_videos[0]
-        return None 
+        return None
+
+    def _is_youtube_music_url(self, url: str) -> bool:
+        """Check if URL is from YouTube Music"""
+        parsed = urllib.parse.urlparse(url)
+        return parsed.netloc.lower() == "music.youtube.com"
+
+    async def get_video_info_with_fallback(self, url: str) -> YouTubeVideo:
+        """
+        Get video info with fallback for YouTube Music URLs.
+        Tries YouTube Music first, then falls back to YouTube if unavailable.
+        """
+        # Check if this is a YouTube Music URL
+        is_music = self._is_youtube_music_url(url)
+
+        if is_music:
+            # Try YouTube Music client first
+            try:
+                return await self.get_video_info(url)
+            except VideoUnavailable:
+                # Fallback: convert to YouTube equivalent
+                youtube_url = url.replace("music.youtube.com", "www.youtube.com")
+                _log.info(f"YouTube Music unavailable, trying YouTube: {youtube_url}")
+                return await self.get_video_info(youtube_url)
+            except YouTubeAgeRestricted:
+                raise YouTubeAgeRestricted("Video is age-restricted on YouTube Music")
+        else:
+            # Regular YouTube URL
+            return await self.get_video_info(url) 

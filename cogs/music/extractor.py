@@ -3,6 +3,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Literal, Union
 
+from cogs.components.discord_embed import Embed
 from cogs.music.core.song import (
     SongMeta,
     SoundCloudSongMeta,
@@ -13,7 +14,12 @@ from cogs.music.core.song import (
 from cogs.music.services.soundcloud.service import SoundCloudService
 from cogs.music.services.spotify import album, playlist, search, track
 from cogs.music.services.spotify.service import SpotifyService
-from cogs.music.services.youtube_service import YouTubeService, VideoUnavailable
+from cogs.music.services.youtube_service import (
+    YouTubeService,
+    VideoUnavailable,
+    YouTubeAgeRestricted,
+    YouTubeMusicOnly,
+)
 from core.exceptions import ExtractException
 from discord.ext import commands
 from soundcloud import BasicTrack, MiniTrack
@@ -84,6 +90,11 @@ class YoutubeExtractor(Extractor):
                         for video in playlist.videos
                     ]
                 )
+                if songs and len(songs) < len(playlist.videos):
+                    _log.warning(f"Some videos in playlist could not be extracted")
+                    await ctx.send(embed=Embed().error(
+                        "⚠️ Một số video trong playlist không thể phát."
+                    ))
                 return songs
             except Exception as e:
                 _log.error(f"Error extracting playlist: {e}")
@@ -94,7 +105,27 @@ class YoutubeExtractor(Extractor):
                 yt_video.check_availability()
                 song = await self.create_song_metadata(yt_video, ctx, None)
                 return [song]
+            except YouTubeAgeRestricted:
+                _log.warning(f"Age-restricted video: {query}")
+                await ctx.send(embed=Embed().error(
+                    "⚠️ Video bị giới hạn độ tuổi. Bot không thể phát video này."
+                ))
+                return None
+            except YouTubeMusicOnly:
+                _log.warning(f"Video only on YouTube Music, trying fallback: {query}")
+                # Try fallback - this would be handled by the service
+                return None
             except VideoUnavailable:
+                _log.warning(f"Video unavailable: {query}")
+                await ctx.send(embed=Embed().error(
+                    "⚠️ Video không tồn tại hoặc đã bị xóa."
+                ))
+                return None
+            except Exception as e:
+                _log.error(f"Error extracting video: {e}")
+                await ctx.send(embed=Embed().error(
+                    "❌ Không thể kết nối YouTube. Vui lòng thử lại sau."
+                ))
                 return None
 
 

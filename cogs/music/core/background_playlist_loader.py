@@ -328,10 +328,11 @@ class BackgroundPlaylistLoader:
         return None
     
     def _is_playlist_url(self, url: str) -> bool:
-        """Check if URL is a playlist/collection URL"""
+        """Check if URL is a playlist/collection URL or YouTube Short"""
         url_lower = url.lower()
         return any(pattern in url_lower for pattern in [
-            '/playlist?', '&list=', '/sets/', '/album/', '/collection/'
+            '/playlist?', '&list=', '/sets/', '/album/', '/collection/',
+            '/shorts/',  # YouTube Shorts as single-item "playlist"
         ])
     
     async def load_playlist_optimized(self, url: str, ctx: commands.Context, 

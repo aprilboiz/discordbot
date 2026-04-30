@@ -21,6 +21,9 @@ ENV TZ=Asia/Ho_Chi_Minh
 
 WORKDIR /app
 
+# Install Deno (required for yt-dlp YouTube support)
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
+
 # Install runtime dependencies in a single step
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg &&\

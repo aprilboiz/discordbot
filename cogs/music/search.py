@@ -38,6 +38,47 @@ class Search:
         netloc = parsed_url.netloc
         return netloc.lower() == "music.youtube.com"
 
+    def is_youtube_short(self, url: str) -> bool:
+        """Check if URL is a YouTube Short (youtube.com/shorts/ID or youtu.be/ID)"""
+        url_lower = url.lower()
+        # youtube.com/shorts/ID
+        if "/shorts/" in url_lower:
+            return True
+        # youtu.be/ID (short URL)
+        if netloc := urllib.parse.urlparse(url).netloc.lower() == "youtu.be":
+            return True
+        return False
+
+    def is_youtube_channel_videos(self, url: str) -> bool:
+        """Check if URL is a YouTube channel videos page"""
+        url_lower = url.lower()
+        return "/videos" in url_lower or "/@channel/" in url_lower or "/@" in url_lower
+
+    def normalize_youtube_url(self, url: str) -> str:
+        """
+        Normalize YouTube URLs to standard watch format.
+        Returns normalized URL, keeping original for YouTube Music.
+        """
+        is_music = self.is_youtube_music(url)
+        
+        if is_music:
+            return url, "youtube_music"
+        
+        url_lower = url.lower()
+        
+        # Handle YouTube Shorts - normalize to watch format
+        if "/shorts/" in url_lower:
+            video_id = url.split("/shorts/")[-1].split("?")[0]
+            return f"https://www.youtube.com/watch?v={video_id}", "youtube"
+        
+        # Handle youtu.be short URLs
+        parsed = urllib.parse.urlparse(url)
+        if parsed.netloc.lower() == "youtu.be":
+            video_id = parsed.path.lstrip("/")
+            return f"https://www.youtube.com/watch?v={video_id}", "youtube"
+        
+        return url, "youtube"
+
     def is_spotify(self, url: str) -> bool:
         parsed_url = urllib.parse.urlparse(url)
         netloc = parsed_url.netloc
@@ -95,11 +136,21 @@ class Search:
         else:
             if self.is_url(query):
                 if self.is_youtube(query) or self.is_youtube_music(query):
+                    # Normalize YouTube URLs (handles shorts, youtu.be)
+                    normalized_url, service_type = self.normalize_youtube_url(query)
+                    
+                    # For YouTube Music URLs, keep original for extraction (preserves music-only tracks)
                     if self.is_youtube_music(query):
-                        query = query.replace("music.", "")
+                        effective_url = query  # Keep music. subdomain intact
+                    else:
+                        effective_url = normalized_url
+                    
                     is_playlist = "/playlist?" in query or "&list=" in query
+                    is_channel_videos = self.is_youtube_channel_videos(query)
+                    
+                    # Use the extractor with the processed URL
                     songs = await ExtractorFactory.get_extractor("youtube").get_data(
-                        query=query, ctx=ctx, is_playlist=is_playlist, limit=limit
+                        query=effective_url, ctx=ctx, is_playlist=is_playlist or is_channel_videos, limit=limit
                     )
                 elif self.is_soundcloud(query):
                     # For SoundCloud playlists/sets, use special handling
