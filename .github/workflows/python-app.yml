@@ -88,6 +88,8 @@ jobs:
     if: always() && github.ref == 'refs/heads/main'
     needs: [build, deploy]
     runs-on: ubuntu-latest
+    environment:
+      name: production
 
     steps:
       - name: Send Telegram Notification
