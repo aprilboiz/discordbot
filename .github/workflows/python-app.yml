@@ -82,3 +82,28 @@ jobs:
         docker image prune -f
 
         echo "Deployment completed successfully!"
+
+  notify:
+    name: Send Telegram Notification
+    if: always() && github.ref == 'refs/heads/main'
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Telegram Notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN_NOTIFIER }}
+          format: markdown
+          message: |
+            📦 *[${{ github.event.repository.name }}]*
+            -----------------------------------------
+            *Repository:* `${{ github.repository }}`
+            *Branch:* `${{ github.ref_name }}`
+            *Run:* `#${{ github.run_number }}` *(attempt ${{ github.run_attempt }})*
+            *Status:* ${{ needs.deploy.result == 'success' && '✅ THÀNH CÔNG' || '❌ THẤT BẠI' }}
+            *Triggered by:* `${{ github.actor }}`
+            *Detail:* [See Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            *Commit:* `${{ github.sha }}`
+            *Message:* `${{ github.event.head_commit.message }}`
